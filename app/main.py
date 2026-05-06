@@ -1,16 +1,12 @@
-import os
-from collections import defaultdict, deque
-from typing import Deque, Dict, List, Literal, Optional
-
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, Response
-from pydantic import BaseModel, Field
+from app.ai import generate_reply
+from app.config import APP_TITLE, APP_VERSION, DEFAULT_PROVIDER, MAX_MEMORY_MESSAGES
+from app.models import ChatRequest, ChatResponse
+from app.storage import build_chat_store
 
-load_dotenv()
-
-app = FastAPI(title="Sentient Backend", version="0.1.0")
+app = FastAPI(title=APP_TITLE, version=APP_VERSION)
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,23 +15,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MAX_MEMORY_MESSAGES = 8
-memory: Dict[str, Deque[Dict[str, str]]] = defaultdict(
-    lambda: deque(maxlen=MAX_MEMORY_MESSAGES)
-)
-
-
-class ChatRequest(BaseModel):
-    session_id: str = Field(..., min_length=1)
-    message: str = Field(..., min_length=1)
-    provider: Optional[Literal["openai", "claude"]] = None
-
-
-class ChatResponse(BaseModel):
-    session_id: str
-    reply: str
-    provider_used: str
-    memory_size: int
+chat_store = build_chat_store()
 
 
 @app.get("/", response_class=PlainTextResponse)
@@ -50,78 +30,37 @@ def favicon() -> Response:
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "service": "sentient-backend"}
+    return {
+        "ok": True,
+        "service": "sentient-backend",
+        "storage": chat_store.__class__.__name__,
+    }
 
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
-    provider = req.provider or os.getenv("AI_PROVIDER", "openai").lower()
+    provider = req.provider or DEFAULT_PROVIDER
 
-    # Store user message in short-term memory.
-    memory[req.session_id].append({"role": "user", "content": req.message})
-    history: List[Dict[str, str]] = list(memory[req.session_id])
+    chat_store.append_message(req.session_id, "user", req.message)
+    history = chat_store.get_history(req.session_id, MAX_MEMORY_MESSAGES)
 
     try:
         reply = generate_reply(req.message, history, provider)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    # Store assistant response.
-    memory[req.session_id].append({"role": "assistant", "content": reply})
+    chat_store.append_message(req.session_id, "assistant", reply)
+    memory_size = len(chat_store.get_history(req.session_id, MAX_MEMORY_MESSAGES))
 
     return ChatResponse(
         session_id=req.session_id,
         reply=reply,
         provider_used=provider,
-        memory_size=len(memory[req.session_id]),
+        memory_size=memory_size,
     )
 
 
 @app.delete("/memory/{session_id}")
 def clear_memory(session_id: str) -> dict:
-    memory.pop(session_id, None)
+    chat_store.clear_session(session_id)
     return {"ok": True, "session_id": session_id}
-
-
-def generate_reply(
-    latest_message: str, history: List[Dict[str, str]], provider: str
-) -> str:
-    # Bare-bones guardrail to keep tone stable for MVP.
-    system_prompt = (
-        "You are a calm meditation assistant. Keep responses concise, safe, and on-brand."
-    )
-
-    if provider == "openai":
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            return f"[MVP fallback] You said: {latest_message}"
-
-        from openai import OpenAI
-
-        client = OpenAI(api_key=api_key)
-        messages = [{"role": "system", "content": system_prompt}] + history
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            temperature=0.5,
-        )
-        return response.choices[0].message.content or ""
-
-    if provider == "claude":
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            return f"[MVP fallback] You said: {latest_message}"
-
-        import anthropic
-
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-3-5-haiku-latest",
-            max_tokens=300,
-            system=system_prompt,
-            messages=history,
-        )
-        text_blocks = [b.text for b in response.content if getattr(b, "type", "") == "text"]
-        return "\n".join(text_blocks).strip() or ""
-
-    raise ValueError("Unsupported provider. Use 'openai' or 'claude'.")

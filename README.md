@@ -2,6 +2,14 @@
 
 Minimal FastAPI backend for chat MVP.
 
+## Current Backend Layout
+
+- `app/main.py` API routes
+- `app/models.py` request/response schema
+- `app/ai.py` OpenAI/Claude routing and safe fallback replies
+- `app/storage.py` storage abstraction (in-memory or Postgres)
+- `app/config.py` app/environment configuration
+
 ## Architecture Note
 
 Backend is deployed as a separate service from the Flutter app.
@@ -14,6 +22,13 @@ Keep frontend and backend release pipelines independent.
 - `POST /chat`
 - `DELETE /memory/{session_id}`
 
+## Storage
+
+Set `SUPABASE_DB_URL` to your Supabase Postgres connection string to persist chat history.
+If it is omitted, the backend falls back to in-memory session storage.
+
+If `SUPABASE_DB_URL` is set but invalid/unreachable, startup falls back to in-memory storage.
+
 ## Quick Start
 
 1. Create and activate a virtual environment.
@@ -21,7 +36,7 @@ Keep frontend and backend release pipelines independent.
    `pip install -r requirements.txt`
 3. Copy `.env.example` to `.env` and add keys if needed.
 4. Run:
-   `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
+   `python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
 
 ## Startup Procedure (Windows PowerShell)
 
@@ -36,13 +51,18 @@ Keep frontend and backend release pipelines independent.
 5. Create env file (first time only):
    `copy .env.example .env`
 6. Start API server:
-   `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
+   `python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
+
+If port 8000 is unavailable on your machine:
+`python -m uvicorn app.main:app --host 0.0.0.0 --port 8001`
 
 ## Verify It Is Running
 
 - Root: `http://127.0.0.1:8000/`
 - Health: `http://127.0.0.1:8000/health`
 - Docs: `http://127.0.0.1:8000/docs`
+
+If using port 8001, replace `8000` with `8001` in the URLs above.
 
 ## Chat Request Example
 
@@ -55,3 +75,9 @@ Keep frontend and backend release pipelines independent.
 ```
 
 If API keys are missing, backend returns a fallback echo so you can test app wiring first.
+
+If provider requests fail (for example quota/auth issues), backend also returns MVP fallback text instead of HTTP 500.
+
+For persistent chat, add a direct Postgres URL in `.env`:
+
+`SUPABASE_DB_URL=postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require`
