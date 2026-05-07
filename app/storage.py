@@ -5,7 +5,11 @@ from app.config import MAX_MEMORY_MESSAGES, SUPABASE_DB_URL, logger
 
 
 class ChatStore(Protocol):
+    def ensure_session(self, session_id: str) -> None: ...
+
     def get_history(self, session_id: str, limit: int) -> List[Dict[str, str]]: ...
+
+    def list_messages(self, session_id: str, limit: int) -> List[Dict[str, str]]: ...
 
     def append_message(self, session_id: str, role: str, content: str) -> None: ...
 
@@ -22,6 +26,12 @@ class InMemoryChatStore:
     def get_history(self, session_id: str, limit: int) -> List[Dict[str, str]]:
         history = list(self.memory[session_id])
         return history[-limit:]
+
+    def list_messages(self, session_id: str, limit: int) -> List[Dict[str, str]]:
+        return self.get_history(session_id, limit)
+
+    def ensure_session(self, session_id: str) -> None:
+        _ = self.memory[session_id]
 
     def append_message(self, session_id: str, role: str, content: str) -> None:
         self.memory[session_id].append({"role": role, "content": content})
@@ -85,7 +95,10 @@ class PostgresChatStore:
         rows.reverse()
         return [{"role": role, "content": content} for role, content in rows]
 
-    def append_message(self, session_id: str, role: str, content: str) -> None:
+    def list_messages(self, session_id: str, limit: int) -> List[Dict[str, str]]:
+        return self.get_history(session_id, limit)
+
+    def ensure_session(self, session_id: str) -> None:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
@@ -96,6 +109,10 @@ class PostgresChatStore:
                 """,
                 (session_id,),
             )
+
+    def append_message(self, session_id: str, role: str, content: str) -> None:
+        self.ensure_session(session_id)
+        with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO chat_messages (session_id, role, content)

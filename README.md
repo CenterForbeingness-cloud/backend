@@ -20,7 +20,12 @@ Keep frontend and backend release pipelines independent.
 
 - `GET /health`
 - `POST /chat`
+- `POST /sessions`
+- `GET /sessions/{session_id}/messages?limit=50`
 - `DELETE /memory/{session_id}`
+
+`POST /sessions` accepts an optional `session_id` and returns the active session id.
+`GET /sessions/{session_id}/messages` returns recent messages for that session.
 
 ## Storage
 
@@ -77,6 +82,18 @@ If using port 8001, replace `8000` with `8001` in the URLs above.
 If API keys are missing, backend returns a fallback echo so you can test app wiring first.
 
 If provider requests fail (for example quota/auth issues), backend also returns MVP fallback text instead of HTTP 500.
+
+## RAG Scaffold
+
+The backend includes a retriever seam at `app/rag.py` used by `/chat`.
+It currently defaults to a no-op retriever, so behavior is unchanged until you plug in Pinecone/Weaviate.
+
+To add retrieval later, implement `retrieve(query, top_k)` in a retriever class and return context chunks.
+Those chunks are injected into the system prompt in `app/ai.py`.
+
+Environment flags for scaffold control:
+- `RAG_ENABLED=false`
+- `RAG_TOP_K=3`
 
 For persistent chat, add a direct Postgres URL in `.env`:
 

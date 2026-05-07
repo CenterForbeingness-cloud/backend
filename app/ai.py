@@ -1,11 +1,19 @@
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
-def generate_reply(latest_message: str, history: List[Dict[str, str]], provider: str) -> str:
+def generate_reply(
+    latest_message: str,
+    history: List[Dict[str, str]],
+    provider: str,
+    retrieved_context: Optional[List[str]] = None,
+) -> str:
     system_prompt = (
         "You are a calm meditation assistant. Keep responses concise, safe, and on-brand."
     )
+    if retrieved_context:
+        context_block = "\n\n".join(retrieved_context)
+        system_prompt = f"{system_prompt}\n\nRelevant context:\n{context_block}"
 
     if provider == "openai":
         api_key = os.getenv("OPENAI_API_KEY")
