@@ -40,9 +40,11 @@ def get_current_user(
             audience="authenticated",
         )
         return payload
-    except Exception:
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("JWT verification failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from exc

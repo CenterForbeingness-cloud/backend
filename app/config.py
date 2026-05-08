@@ -16,3 +16,5 @@ SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 AUTH_ENFORCED = os.getenv("AUTH_ENFORCED", "false").lower() in {"1", "true", "yes", "on"}
 RAG_ENABLED = os.getenv("RAG_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "3"))
+_raw_cors = os.getenv("CORS_ORIGINS", "")
+CORS_ORIGINS: list[str] = [o.strip() for o in _raw_cors.split(",") if o.strip()]

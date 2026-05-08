@@ -4,39 +4,73 @@ from typing import Deque, Dict, List, Protocol
 from app.config import MAX_MEMORY_MESSAGES, SUPABASE_DB_URL, logger
 
 
+class SessionAccessError(Exception):
+    pass
+
+
 class ChatStore(Protocol):
-    def ensure_session(self, session_id: str) -> None: ...
+    def ensure_session(self, session_id: str, user_id: str | None = None) -> None: ...
 
-    def get_history(self, session_id: str, limit: int) -> List[Dict[str, str]]: ...
+    def get_history(
+        self, session_id: str, limit: int, user_id: str | None = None
+    ) -> List[Dict[str, str]]: ...
 
-    def list_messages(self, session_id: str, limit: int) -> List[Dict[str, str]]: ...
+    def list_messages(
+        self, session_id: str, limit: int, user_id: str | None = None
+    ) -> List[Dict[str, str]]: ...
 
-    def append_message(self, session_id: str, role: str, content: str) -> None: ...
+    def append_message(
+        self, session_id: str, role: str, content: str, user_id: str | None = None
+    ) -> None: ...
 
-    def clear_session(self, session_id: str) -> None: ...
+    def clear_session(self, session_id: str, user_id: str | None = None) -> None: ...
 
 
 class InMemoryChatStore:
     def __init__(self, max_messages: int) -> None:
         self.max_messages = max_messages
+        self.session_owners: Dict[str, str | None] = {}
         self.memory: Dict[str, Deque[Dict[str, str]]] = defaultdict(
             lambda: deque(maxlen=max_messages)
         )
 
-    def get_history(self, session_id: str, limit: int) -> List[Dict[str, str]]:
+    def _assert_access(self, session_id: str, user_id: str | None) -> None:
+        if user_id is None:
+            return
+
+        owner_id = self.session_owners.get(session_id)
+        if owner_id is not None and owner_id != user_id:
+            raise SessionAccessError("Session does not belong to the current user")
+
+    def get_history(
+        self, session_id: str, limit: int, user_id: str | None = None
+    ) -> List[Dict[str, str]]:
+        self._assert_access(session_id, user_id)
         history = list(self.memory[session_id])
         return history[-limit:]
 
-    def list_messages(self, session_id: str, limit: int) -> List[Dict[str, str]]:
-        return self.get_history(session_id, limit)
+    def list_messages(
+        self, session_id: str, limit: int, user_id: str | None = None
+    ) -> List[Dict[str, str]]:
+        return self.get_history(session_id, limit, user_id)
 
-    def ensure_session(self, session_id: str) -> None:
+    def ensure_session(self, session_id: str, user_id: str | None = None) -> None:
+        self._assert_access(session_id, user_id)
+        if session_id not in self.session_owners:
+            self.session_owners[session_id] = user_id
+        elif self.session_owners[session_id] is None and user_id is not None:
+            self.session_owners[session_id] = user_id
         _ = self.memory[session_id]
 
-    def append_message(self, session_id: str, role: str, content: str) -> None:
+    def append_message(
+        self, session_id: str, role: str, content: str, user_id: str | None = None
+    ) -> None:
+        self.ensure_session(session_id, user_id)
         self.memory[session_id].append({"role": role, "content": content})
 
-    def clear_session(self, session_id: str) -> None:
+    def clear_session(self, session_id: str, user_id: str | None = None) -> None:
+        self._assert_access(session_id, user_id)
+        self.session_owners.pop(session_id, None)
         self.memory.pop(session_id, None)
 
 
@@ -50,36 +84,50 @@ class PostgresChatStore:
         return psycopg.connect(self.dsn, autocommit=True, connect_timeout=5)
 
     def init(self) -> None:
+        """Verify the required tables exist. Schema is managed externally via
+        backend/sql/supabase_chat_rls.sql — do NOT run DDL here because the
+        pooler role lacks the privileges needed to reference auth.users."""
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                CREATE TABLE IF NOT EXISTS chat_sessions (
-                    session_id TEXT PRIMARY KEY,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc', now()),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc', now())
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name IN ('chat_sessions', 'chat_messages')
+                """
+            )
+            found = cur.fetchall()
+            if len(found) < 2:
+                raise RuntimeError(
+                    "Required tables 'chat_sessions' and/or 'chat_messages' not found in the "
+                    "database. Run backend/sql/supabase_chat_rls.sql in Supabase SQL Editor first."
                 )
-                """
-            )
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS chat_messages (
-                    id BIGSERIAL PRIMARY KEY,
-                    session_id TEXT NOT NULL REFERENCES chat_sessions(session_id) ON DELETE CASCADE,
-                    role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
-                    content TEXT NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc', now())
-                )
-                """
-            )
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created_at
-                ON chat_messages(session_id, created_at, id)
-                """
-            )
 
-    def get_history(self, session_id: str, limit: int) -> List[Dict[str, str]]:
+    def _assert_access(self, cur, session_id: str, user_id: str | None) -> None:
+        if user_id is None:
+            return
+
+        cur.execute(
+            """
+            SELECT user_id
+            FROM chat_sessions
+            WHERE session_id = %s
+            """,
+            (session_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return
+
+        owner_id = row[0]
+        if owner_id is not None and str(owner_id) != user_id:
+            raise SessionAccessError("Session does not belong to the current user")
+
+    def get_history(
+        self, session_id: str, limit: int, user_id: str | None = None
+    ) -> List[Dict[str, str]]:
         with self._connect() as conn, conn.cursor() as cur:
+            self._assert_access(cur, session_id, user_id)
             cur.execute(
                 """
                 SELECT role, content
@@ -95,23 +143,33 @@ class PostgresChatStore:
         rows.reverse()
         return [{"role": role, "content": content} for role, content in rows]
 
-    def list_messages(self, session_id: str, limit: int) -> List[Dict[str, str]]:
-        return self.get_history(session_id, limit)
+    def list_messages(
+        self, session_id: str, limit: int, user_id: str | None = None
+    ) -> List[Dict[str, str]]:
+        return self.get_history(session_id, limit, user_id)
 
-    def ensure_session(self, session_id: str) -> None:
+    def ensure_session(self, session_id: str, user_id: str | None = None) -> None:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO chat_sessions (session_id, updated_at)
-                VALUES (%s, timezone('utc', now()))
+                INSERT INTO chat_sessions (session_id, user_id, updated_at)
+                VALUES (%s, %s, timezone('utc', now()))
                 ON CONFLICT (session_id)
-                DO UPDATE SET updated_at = EXCLUDED.updated_at
+                DO UPDATE SET
+                    updated_at = EXCLUDED.updated_at,
+                    user_id = COALESCE(chat_sessions.user_id, EXCLUDED.user_id)
+                RETURNING user_id
                 """,
-                (session_id,),
+                (session_id, user_id),
             )
+            owner_id = cur.fetchone()[0]
+            if user_id is not None and owner_id is not None and str(owner_id) != user_id:
+                raise SessionAccessError("Session does not belong to the current user")
 
-    def append_message(self, session_id: str, role: str, content: str) -> None:
-        self.ensure_session(session_id)
+    def append_message(
+        self, session_id: str, role: str, content: str, user_id: str | None = None
+    ) -> None:
+        self.ensure_session(session_id, user_id)
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
@@ -121,8 +179,9 @@ class PostgresChatStore:
                 (session_id, role, content),
             )
 
-    def clear_session(self, session_id: str) -> None:
+    def clear_session(self, session_id: str, user_id: str | None = None) -> None:
         with self._connect() as conn, conn.cursor() as cur:
+            self._assert_access(cur, session_id, user_id)
             cur.execute("DELETE FROM chat_sessions WHERE session_id = %s", (session_id,))
 
 
