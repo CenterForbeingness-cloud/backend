@@ -9,6 +9,8 @@ class ChatRequest(BaseModel):
     session_id: str = Field(..., min_length=1)
     message: str = Field(..., min_length=1)
     provider: Optional[Literal["openai", "claude"]] = None
+    course_slug: Optional[str] = None
+    week_number: Optional[int] = None
 
 
 class ChatResponse(BaseModel):
@@ -47,6 +49,35 @@ class SessionListResponse(BaseModel):
     sessions: list[SessionSummaryItem]
 
 
+class LessonItem(BaseModel):
+    lesson_number: int
+    title: str
+    filename: str
+
+
+class WeekItem(BaseModel):
+    week_number: int
+    title: str
+    lessons: list[LessonItem]
+
+
+class CourseItem(BaseModel):
+    course_slug: str
+    title: str
+    description: str
+    week_count: int
+
+
+class CourseListResponse(BaseModel):
+    courses: list[CourseItem]
+
+
+class CourseDetailResponse(BaseModel):
+    course_slug: str
+    title: str
+    weeks: list[WeekItem]
+
+
 class BillingCheckoutRequest(BaseModel):
     price_id: str = Field(..., min_length=1)
     quantity: int = Field(default=1, ge=1, le=10)
@@ -59,6 +90,32 @@ class BillingCheckoutResponse(BaseModel):
     checkout_url: str
     session_id: str
     publishable_key: Optional[str] = None
+
+
+class EntitlementResponse(BaseModel):
+    owned_courses: list[str]
+
+
+class UsageResponse(BaseModel):
+    messages_today: int
+    limit: int
+    reset_at: datetime
+
+
+class AdminLoginRequest(BaseModel):
+    email: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=8)
+
+
+class AdminTOTPVerifyRequest(BaseModel):
+    email: str = Field(..., min_length=1)
+    totp_code: str = Field(..., regex="^[0-9]{6}$")
+
+
+class AdminTokenResponse(BaseModel):
+    admin_token: str
+    admin_email: str
+    role: str
 
 
 def generate_session_id() -> str:

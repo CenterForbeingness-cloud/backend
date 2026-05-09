@@ -7,13 +7,17 @@ def generate_reply(
     history: List[Dict[str, str]],
     provider: str,
     retrieved_context: Optional[List[str]] = None,
+    *,
+    base_script: Optional[str] = None,
 ) -> str:
     system_prompt = (
         "You are a calm meditation assistant. Keep responses concise, safe, and on-brand."
     )
+    if base_script:
+        system_prompt = f"{system_prompt}\n\n[Grounded Base Script]\n{base_script}"
     if retrieved_context:
         context_block = "\n\n".join(retrieved_context)
-        system_prompt = f"{system_prompt}\n\nRelevant context:\n{context_block}"
+        system_prompt = f"{system_prompt}\n\n[Context]\n{context_block}"
 
     if provider == "openai":
         api_key = os.getenv("OPENAI_API_KEY")
