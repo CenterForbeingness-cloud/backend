@@ -1,4 +1,4 @@
-# Sentient Backend (Bare Bones)
+﻿# Sentient Backend (Bare Bones)
 
 Minimal FastAPI backend for chat MVP.
 
@@ -131,7 +131,7 @@ Required request sequence for protected chat:
 3. Apply fair-use limits for abuse prevention (internal guardrail).
 4. Enforce course ownership entitlement when `course_slug` is present.
 5. Build context (base script, base transcript, selected course/week, retrieved chunks).
-6. Generate AI response and persist message + usage events.
+6. Generate AI response and persist message and usage events.
 
 Recommended new backend modules:
 
@@ -155,3 +155,4 @@ Chat contract extension target:
 
 - `POST /chat` accepts optional `course_slug` and `week`.
 - Backend checks entitlement before course retrieval.
+
