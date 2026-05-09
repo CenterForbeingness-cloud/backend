@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal, Optional
 from uuid import uuid4
 
@@ -33,6 +34,31 @@ class MessageItem(BaseModel):
 class SessionMessagesResponse(BaseModel):
     session_id: str
     messages: list[MessageItem]
+
+
+class SessionSummaryItem(BaseModel):
+    session_id: str
+    updated_at: datetime
+    message_count: int
+    last_message_preview: str
+
+
+class SessionListResponse(BaseModel):
+    sessions: list[SessionSummaryItem]
+
+
+class BillingCheckoutRequest(BaseModel):
+    price_id: str = Field(..., min_length=1)
+    quantity: int = Field(default=1, ge=1, le=10)
+    course_slug: Optional[str] = None
+    success_url: Optional[str] = None
+    cancel_url: Optional[str] = None
+
+
+class BillingCheckoutResponse(BaseModel):
+    checkout_url: str
+    session_id: str
+    publishable_key: Optional[str] = None
 
 
 def generate_session_id() -> str:

@@ -1,4 +1,5 @@
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 from typing import Deque, Dict, List, Protocol
 
 from app.config import MAX_MEMORY_MESSAGES, SUPABASE_DB_URL, logger
@@ -10,6 +11,10 @@ class SessionAccessError(Exception):
 
 class ChatStore(Protocol):
     def ensure_session(self, session_id: str, user_id: str | None = None) -> None: ...
+
+    def list_sessions(
+        self, limit: int, user_id: str | None = None
+    ) -> List[Dict[str, str]]: ...
 
     def get_history(
         self, session_id: str, limit: int, user_id: str | None = None
@@ -30,6 +35,8 @@ class InMemoryChatStore:
     def __init__(self, max_messages: int) -> None:
         self.max_messages = max_messages
         self.session_owners: Dict[str, str | None] = {}
+        self.session_created_at: Dict[str, datetime] = {}
+        self.session_updated_at: Dict[str, datetime] = {}
         self.memory: Dict[str, Deque[Dict[str, str]]] = defaultdict(
             lambda: deque(maxlen=max_messages)
         )
@@ -58,19 +65,48 @@ class InMemoryChatStore:
         self._assert_access(session_id, user_id)
         if session_id not in self.session_owners:
             self.session_owners[session_id] = user_id
+            now = datetime.now(timezone.utc)
+            self.session_created_at[session_id] = now
+            self.session_updated_at[session_id] = now
         elif self.session_owners[session_id] is None and user_id is not None:
             self.session_owners[session_id] = user_id
+            now = datetime.now(timezone.utc)
+            self.session_updated_at[session_id] = now
         _ = self.memory[session_id]
+
+    def list_sessions(
+        self, limit: int, user_id: str | None = None
+    ) -> List[Dict[str, str]]:
+        sessions: list[dict[str, str]] = []
+        for session_id, messages in self.memory.items():
+            owner_id = self.session_owners.get(session_id)
+            if user_id is not None and owner_id is not None and owner_id != user_id:
+                continue
+            last_message_preview = messages[-1]["content"] if messages else ""
+            sessions.append(
+                {
+                    "session_id": session_id,
+                    "updated_at": self.session_updated_at.get(session_id, datetime.now(timezone.utc)).isoformat(),
+                    "message_count": len(messages),
+                    "last_message_preview": last_message_preview,
+                }
+            )
+
+        sessions.sort(key=lambda item: item["updated_at"], reverse=True)
+        return sessions[:limit]
 
     def append_message(
         self, session_id: str, role: str, content: str, user_id: str | None = None
     ) -> None:
         self.ensure_session(session_id, user_id)
         self.memory[session_id].append({"role": role, "content": content})
+        self.session_updated_at[session_id] = datetime.now(timezone.utc)
 
     def clear_session(self, session_id: str, user_id: str | None = None) -> None:
         self._assert_access(session_id, user_id)
         self.session_owners.pop(session_id, None)
+        self.session_created_at.pop(session_id, None)
+        self.session_updated_at.pop(session_id, None)
         self.memory.pop(session_id, None)
 
 
@@ -93,7 +129,7 @@ class PostgresChatStore:
                 SELECT 1
                 FROM information_schema.tables
                 WHERE table_schema = 'public'
-                  AND table_name IN ('chat_sessions', 'chat_messages')
+                                    AND table_name IN ('chat_sessions', 'chat_messages')
                 """
             )
             found = cur.fetchall()
@@ -143,6 +179,48 @@ class PostgresChatStore:
         rows.reverse()
         return [{"role": role, "content": content} for role, content in rows]
 
+    def list_sessions(
+        self, limit: int, user_id: str | None = None
+    ) -> List[Dict[str, str]]:
+        with self._connect() as conn, conn.cursor() as cur:
+            query = """
+                SELECT s.session_id,
+                       s.updated_at,
+                       COALESCE(msg.content, '') AS last_message_preview,
+                       COALESCE(cnt.message_count, 0) AS message_count
+                FROM chat_sessions s
+                LEFT JOIN LATERAL (
+                    SELECT content
+                    FROM chat_messages
+                    WHERE session_id = s.session_id
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                ) msg ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*)::int AS message_count
+                    FROM chat_messages
+                    WHERE session_id = s.session_id
+                ) cnt ON TRUE
+            """
+            params: list[object] = []
+            if user_id is not None:
+                query += " WHERE s.user_id = %s"
+                params.append(user_id)
+            query += " ORDER BY s.updated_at DESC LIMIT %s"
+            params.append(limit)
+            cur.execute(query, tuple(params))
+            rows = cur.fetchall()
+
+        return [
+            {
+                "session_id": str(session_id),
+                "updated_at": updated_at.isoformat(),
+                "message_count": int(message_count),
+                "last_message_preview": last_message_preview or "",
+            }
+            for session_id, updated_at, last_message_preview, message_count in rows
+        ]
+
     def list_messages(
         self, session_id: str, limit: int, user_id: str | None = None
     ) -> List[Dict[str, str]]:
@@ -178,6 +256,48 @@ class PostgresChatStore:
                 """,
                 (session_id, role, content),
             )
+
+    def list_sessions(
+        self, limit: int, user_id: str | None = None
+    ) -> List[Dict[str, str]]:
+        with self._connect() as conn, conn.cursor() as cur:
+            query = """
+                SELECT s.session_id,
+                       s.updated_at,
+                       COALESCE(msg.content, '') AS last_message_preview,
+                       COALESCE(cnt.message_count, 0) AS message_count
+                FROM chat_sessions s
+                LEFT JOIN LATERAL (
+                    SELECT content
+                    FROM chat_messages
+                    WHERE session_id = s.session_id
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                ) msg ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*)::int AS message_count
+                    FROM chat_messages
+                    WHERE session_id = s.session_id
+                ) cnt ON TRUE
+            """
+            params: list[object] = []
+            if user_id is not None:
+                query += " WHERE s.user_id = %s"
+                params.append(user_id)
+            query += " ORDER BY s.updated_at DESC LIMIT %s"
+            params.append(limit)
+            cur.execute(query, tuple(params))
+            rows = cur.fetchall()
+
+        return [
+            {
+                "session_id": str(session_id),
+                "updated_at": updated_at.isoformat(),
+                "message_count": int(message_count),
+                "last_message_preview": last_message_preview or "",
+            }
+            for session_id, updated_at, last_message_preview, message_count in rows
+        ]
 
     def clear_session(self, session_id: str, user_id: str | None = None) -> None:
         with self._connect() as conn, conn.cursor() as cur:

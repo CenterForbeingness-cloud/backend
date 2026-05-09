@@ -23,6 +23,8 @@ Keep frontend and backend release pipelines independent.
 - `POST /sessions`
 - `GET /sessions/{session_id}/messages?limit=50`
 - `DELETE /memory/{session_id}`
+- `POST /billing/webhook`
+- `POST /billing/checkout`
 
 `POST /sessions` accepts an optional `session_id` and returns the active session id.
 `GET /sessions/{session_id}/messages` returns recent messages for that session.
@@ -98,3 +100,58 @@ Environment flags for scaffold control:
 For persistent chat, add a direct Postgres URL in `.env`:
 
 `SUPABASE_DB_URL=postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require`
+
+SQL setup files:
+
+- `backend/sql/supabase_chat_rls.sql` for chat session/message schema and RLS
+- `backend/sql/supabase_courses_billing_rls.sql` for course catalog, Stripe purchase ownership, entitlements, and billing event tables
+
+Stripe env variables expected by backend config:
+
+- `STRIPE_SECRET_KEY` (server-side Stripe secret key)
+- `STRIPE_PUBLISHABLE_KEY` (public key, returned to clients by future billing endpoints)
+- `STRIPE_WEBHOOK_SECRET` (webhook signature verification)
+
+Backward compatibility:
+
+- `STRIPE_API_KEY` is still supported as a fallback alias for `STRIPE_SECRET_KEY`.
+
+Stripe CLI and webhook testing guide:
+
+- `backend/STRIPE_PAYMENTS.md`
+
+## Next Backend Flow (Courses and Payments)
+
+The next backend milestone is a course-aware, purchase-ownership, and entitlement-gated request path.
+
+Required request sequence for protected chat:
+
+1. Validate Supabase JWT and resolve `user_id`.
+2. Validate request payload (`session_id`, `message`, optional `course_slug`, `week`).
+3. Apply fair-use limits for abuse prevention (internal guardrail).
+4. Enforce course ownership entitlement when `course_slug` is present.
+5. Build context (base script, base transcript, selected course/week, retrieved chunks).
+6. Generate AI response and persist message + usage events.
+
+Recommended new backend modules:
+
+- `app/courses.py` course catalog and lesson service
+- `app/entitlements.py` entitlement checks and gating rules
+- `app/billing.py` checkout and webhook reconciliation
+- `app/quotas.py` request budgeting and usage counters
+
+Minimum additional endpoints:
+
+- `GET /courses`
+- `GET /courses/{course_slug}`
+- `GET /billing/products`
+- `GET /billing/purchases`
+- `POST /billing/checkout` (course purchase)
+- `POST /billing/webhook`
+- `GET /entitlements`
+- `GET /usage`
+
+Chat contract extension target:
+
+- `POST /chat` accepts optional `course_slug` and `week`.
+- Backend checks entitlement before course retrieval.
