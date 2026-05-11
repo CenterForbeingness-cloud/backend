@@ -11,6 +11,42 @@ from typing import Optional
 from app.config import FAIR_USE_LIMIT, QUOTA_RESET_PERIOD_HOURS, SUPABASE_DB_URL, logger
 
 
+_schema_bootstrapped = False
+
+
+def _ensure_quotas_schema() -> bool:
+    """Create quotas tables if missing (idempotent). Returns True on success."""
+    global _schema_bootstrapped
+    
+    if _schema_bootstrapped:
+        return True
+    
+    try:
+        with _get_db_connection() as conn, conn.cursor() as cur:
+            # Create user_message_counts table if missing
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS public.user_message_counts (
+                    user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+                    message_count INTEGER NOT NULL DEFAULT 0,
+                    period_start TIMESTAMP WITH TIME ZONE NOT NULL,
+                    last_updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Create index for faster lookups
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_user_message_counts_period 
+                ON public.user_message_counts(user_id, period_start)
+            """)
+            
+            _schema_bootstrapped = True
+            return True
+    except Exception as exc:
+        logger.error("Failed to bootstrap quotas schema: %s", exc)
+        return False
+
+
 def _get_db_connection():
     """Get a Postgres connection. Used internally by all functions."""
     if not SUPABASE_DB_URL:
@@ -31,6 +67,7 @@ def get_message_count(user_id: str) -> int:
     Returns:
         Number of messages in current period (>= 0)
     """
+    _ensure_quotas_schema()
     try:
         with _get_db_connection() as conn, conn.cursor() as cur:
             cur.execute(
@@ -104,6 +141,7 @@ def increment_message_count(user_id: str) -> bool:
     Returns:
         True if incremented successfully, False on error
     """
+    _ensure_quotas_schema()
     try:
         now = datetime.now(timezone.utc)
         with _get_db_connection() as conn, conn.cursor() as cur:
@@ -135,6 +173,7 @@ def get_usage_info(user_id: str, limit: int = FAIR_USE_LIMIT) -> dict:
     Returns:
         Dict with keys: messages_today, limit, reset_at (ISO datetime string)
     """
+    _ensure_quotas_schema()
     try:
         with _get_db_connection() as conn, conn.cursor() as cur:
             cur.execute(

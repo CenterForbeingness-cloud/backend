@@ -42,9 +42,9 @@ class PineconeRetriever:
     Retrieves relevant content chunks from Pinecone with optional course/week filtering.
 
     Pinecone metadata filter logic:
-      - No course_slug supplied  → base namespace only (fallback / general chat)
-      - course_slug supplied     → courses namespace, filtered by course_slug
-      - week_number also supplied → additionally filter by week_number
+      - No course_slug supplied  base namespace only (fallback / general chat)
+      - course_slug supplied     courses namespace, filtered by course_slug
+      - week_number also supplied additionally filter by week_number
     """
 
     def __init__(self) -> None:

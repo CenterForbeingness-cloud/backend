@@ -11,12 +11,93 @@ from typing import Optional
 from app.config import SUPABASE_DB_URL, logger
 
 
+_schema_bootstrapped = False
+
+
 def _get_db_connection():
     """Get a Postgres connection. Used internally by all functions."""
     if not SUPABASE_DB_URL:
         raise RuntimeError("SUPABASE_DB_URL not configured")
     import psycopg
     return psycopg.connect(SUPABASE_DB_URL, autocommit=True, connect_timeout=5)
+
+
+def _ensure_entitlements_schema() -> None:
+    """Create or patch entitlement tables required by this module (idempotent)."""
+    global _schema_bootstrapped
+    if _schema_bootstrapped:
+        return
+
+    with _get_db_connection() as conn, conn.cursor() as cur:
+        # Base tables
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS public.user_entitlements (
+                id BIGSERIAL PRIMARY KEY,
+                user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+                course_slug TEXT NOT NULL,
+                granted_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+                granted_by TEXT NOT NULL DEFAULT 'admin',
+                expires_at TIMESTAMPTZ,
+                revoked_at TIMESTAMPTZ,
+                revoked_by TEXT,
+                revoke_reason TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS public.purchase_events (
+                id BIGSERIAL PRIMARY KEY,
+                stripe_event_id TEXT,
+                stripe_event_type TEXT,
+                stripe_session_id TEXT,
+                user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+                course_slug TEXT,
+                received_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+                processed_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+                processing_status TEXT NOT NULL DEFAULT 'success',
+                processing_error TEXT,
+                idempotency_key TEXT
+            )
+            """
+        )
+
+        # Compatibility columns for pre-existing schemas
+        cur.execute("ALTER TABLE public.user_entitlements ADD COLUMN IF NOT EXISTS granted_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())")
+        cur.execute("ALTER TABLE public.user_entitlements ADD COLUMN IF NOT EXISTS granted_by TEXT")
+        cur.execute("ALTER TABLE public.user_entitlements ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ")
+        cur.execute("ALTER TABLE public.user_entitlements ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ")
+        cur.execute("ALTER TABLE public.user_entitlements ADD COLUMN IF NOT EXISTS revoked_by TEXT")
+        cur.execute("ALTER TABLE public.user_entitlements ADD COLUMN IF NOT EXISTS revoke_reason TEXT")
+
+        cur.execute("ALTER TABLE public.purchase_events ADD COLUMN IF NOT EXISTS stripe_event_id TEXT")
+        cur.execute("ALTER TABLE public.purchase_events ADD COLUMN IF NOT EXISTS stripe_event_type TEXT")
+        cur.execute("ALTER TABLE public.purchase_events ADD COLUMN IF NOT EXISTS stripe_session_id TEXT")
+        cur.execute("ALTER TABLE public.purchase_events ADD COLUMN IF NOT EXISTS user_id UUID")
+        cur.execute("ALTER TABLE public.purchase_events ADD COLUMN IF NOT EXISTS course_slug TEXT")
+        cur.execute("ALTER TABLE public.purchase_events ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())")
+        cur.execute("ALTER TABLE public.purchase_events ADD COLUMN IF NOT EXISTS processing_status TEXT NOT NULL DEFAULT 'success'")
+        cur.execute("ALTER TABLE public.purchase_events ADD COLUMN IF NOT EXISTS processing_error TEXT")
+        cur.execute("ALTER TABLE public.purchase_events ADD COLUMN IF NOT EXISTS idempotency_key TEXT")
+
+        # Helpful indexes
+        cur.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_user_entitlements_active_unique
+            ON public.user_entitlements(user_id, course_slug)
+            WHERE revoked_at IS NULL
+            """
+        )
+        cur.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_events_stripe_event_id_unique
+            ON public.purchase_events(stripe_event_id)
+            WHERE stripe_event_id IS NOT NULL
+            """
+        )
+
+    _schema_bootstrapped = True
 
 
 def check_entitlement(user_id: str, course_slug: str) -> bool:
@@ -40,6 +121,7 @@ def check_entitlement(user_id: str, course_slug: str) -> bool:
     Raises:
         RuntimeError: If database is not configured
     """
+    _ensure_entitlements_schema()
     try:
         with _get_db_connection() as conn, conn.cursor() as cur:
             cur.execute(
@@ -71,6 +153,7 @@ def get_user_entitlements(user_id: str) -> list[str]:
     Returns:
         List of course_slug strings
     """
+    _ensure_entitlements_schema()
     try:
         with _get_db_connection() as conn, conn.cursor() as cur:
             cur.execute(
@@ -112,6 +195,7 @@ def grant_entitlement(
     Returns:
         True if granted, False on error
     """
+    _ensure_entitlements_schema()
     try:
         with _get_db_connection() as conn, conn.cursor() as cur:
             # Check if active entitlement already exists
@@ -157,6 +241,7 @@ def revoke_entitlement(user_id: str, course_slug: str, reason: str = "admin_revo
     Returns:
         True if revoked, False on error
     """
+    _ensure_entitlements_schema()
     try:
         with _get_db_connection() as conn, conn.cursor() as cur:
             cur.execute(
@@ -200,6 +285,7 @@ def record_purchase_event(
     Returns:
         True if recorded or already exists, False on error
     """
+    _ensure_entitlements_schema()
     try:
         with _get_db_connection() as conn, conn.cursor() as cur:
             # Try insert with unique stripe_event_id constraint

@@ -109,7 +109,7 @@ class AdminLoginRequest(BaseModel):
 
 class AdminTOTPVerifyRequest(BaseModel):
     email: str = Field(..., min_length=1)
-    totp_code: str = Field(..., regex="^[0-9]{6}$")
+    totp_code: str = Field(..., pattern="^[0-9]{6}$")
 
 
 class AdminTokenResponse(BaseModel):
