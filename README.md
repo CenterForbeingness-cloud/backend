@@ -25,6 +25,11 @@ Keep frontend and backend release pipelines independent.
 - `DELETE /memory/{session_id}`
 - `POST /billing/webhook`
 - `POST /billing/checkout`
+- `POST /billing/payment-intent`
+- `GET /courses`
+- `GET /courses/{course_slug}`
+- `GET /entitlements`
+- `GET /usage`
 
 `POST /sessions` accepts an optional `session_id` and returns the active session id.
 `GET /sessions/{session_id}/messages` returns recent messages for that session.
@@ -117,6 +122,20 @@ Those chunks are injected into the system prompt in `app/ai.py`.
 Environment flags for scaffold control:
 - `RAG_ENABLED=false`
 - `RAG_TOP_K=3`
+
+## Course Catalog And Billing
+
+The backend course catalog now prefers the Supabase course tables when `SUPABASE_DB_URL` is configured.
+If that database connection is unavailable, it falls back to the local `rag/raw/courses/` directory so development still works.
+
+The pricing flow is course-first:
+
+- `GET /courses` returns published course metadata plus pricing fields when present in the database.
+- `GET /entitlements` returns the authenticated user's owned course slugs.
+- `POST /billing/payment-intent` and `POST /billing/checkout` both accept a `course_slug` so the backend can attach purchase metadata.
+- The frontend pricing screen now renders from the course catalog instead of hardcoded cards.
+
+For Supabase deployments, the relevant schema is documented in `backend/sql/supabase_courses_billing_rls.sql`.
 
 For persistent chat, add a direct Postgres URL in `.env`:
 

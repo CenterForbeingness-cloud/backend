@@ -8,7 +8,7 @@ from typing import Optional
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from app.ai import generate_reply
 from app.auth import get_current_user
 from app.config import (
@@ -29,6 +29,8 @@ from app.models import (
     AdminTOTPVerifyRequest,
     BillingCheckoutRequest,
     BillingCheckoutResponse,
+    BillingPaymentIntentRequest,
+    BillingPaymentIntentResponse,
     ChatRequest,
     ChatResponse,
     CourseDetailResponse,
@@ -46,7 +48,13 @@ from app.models import (
 )
 from app.rag import build_context_retriever, load_base_script
 from app.storage import SessionAccessError, build_chat_store
-from app.entitlements import check_entitlement, get_user_entitlements, grant_entitlement, record_purchase_event
+from app.entitlements import (
+    check_entitlement,
+    get_user_entitlements,
+    grant_entitlement,
+    record_purchase_event,
+    revoke_entitlement,
+)
 from app.quotas import check_quota, increment_message_count, get_usage_info
 from app.admin_auth import admin_login, verify_totp as verify_admin_totp
 
@@ -111,6 +119,99 @@ def _as_url(value: Optional[str], fallback: str) -> str:
     return cleaned or fallback
 
 
+def _checkout_return_page(title: str, message: str) -> str:
+        return f"""
+<!doctype html>
+<html>
+<head>
+    <meta charset=\"utf-8\" />
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+    <meta http-equiv=\"refresh\" content=\"2;url=io.supabase.flutter://login-callback/\" />
+    <title>{title}</title>
+    <style>
+        body {{
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif;
+            background: #111827;
+            color: #f3f4f6;
+            display: grid;
+            place-items: center;
+            min-height: 100vh;
+            padding: 24px;
+        }}
+        .card {{
+            max-width: 480px;
+            width: 100%;
+            background: #1f2937;
+            border-radius: 12px;
+            padding: 20px;
+            box-sizing: border-box;
+        }}
+        a {{
+            display: inline-block;
+            margin-top: 12px;
+            text-decoration: none;
+            background: #e7d38a;
+            color: #17333c;
+            font-weight: 700;
+            padding: 10px 14px;
+            border-radius: 10px;
+        }}
+        p {{ line-height: 1.45; }}
+    </style>
+    <script>
+        setTimeout(function () {{
+            window.location.href = 'io.supabase.flutter://login-callback/';
+        }}, 500);
+    </script>
+</head>
+<body>
+    <div class=\"card\">
+        <h1>{title}</h1>
+        <p>{message}</p>
+        <p>Returning to the app automatically...</p>
+        <a href=\"io.supabase.flutter://login-callback/\">Open Sentient</a>
+    </div>
+</body>
+</html>
+"""
+
+
+def _extract_user_and_course(event_obj: dict) -> tuple[Optional[str], Optional[str]]:
+    metadata = event_obj.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    course_slug = metadata.get("course_slug")
+    user_id = (
+        event_obj.get("client_reference_id")
+        or metadata.get("user_id")
+        or metadata.get("client_reference_id")
+    )
+
+    if user_id is not None:
+        user_id = str(user_id).strip() or None
+    if course_slug is not None:
+        course_slug = str(course_slug).strip() or None
+
+    return user_id, course_slug
+
+
+async def _stripe_request(
+    method: str,
+    path: str,
+    *,
+    data: Optional[dict[str, str]] = None,
+) -> httpx.Response:
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        return await client.request(
+            method,
+            f"https://api.stripe.com/v1{path}",
+            data=data,
+            headers={"Authorization": f"Bearer {STRIPE_SECRET_KEY}"},
+        )
+
+
 @app.get("/", response_class=PlainTextResponse)
 def root() -> str:
     return "Sentient backend is running. Visit /docs for API docs."
@@ -130,20 +231,26 @@ def health() -> dict:
     }
 
 
+@app.get("/billing/return/success", response_class=HTMLResponse)
+def billing_return_success() -> str:
+    return _checkout_return_page(
+        title="Payment complete",
+        message="Your payment was successful. Tap below to return to Sentient.",
+    )
+
+
+@app.get("/billing/return/cancel", response_class=HTMLResponse)
+def billing_return_cancel() -> str:
+    return _checkout_return_page(
+        title="Checkout canceled",
+        message="No problem. You can return to Sentient and continue anytime.",
+    )
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, _user: Optional[dict] = Depends(get_current_user)) -> ChatResponse:
     provider = req.provider or DEFAULT_PROVIDER
     user_id = _current_user_id(_user)
-
-    # Check entitlement if accessing a paid course
-    if req.course_slug and user_id:
-        if not check_entitlement(user_id, req.course_slug):
-            logger.warning("Entitlement denied: user=%s course=%s", user_id, req.course_slug)
-            raise HTTPException(
-                status_code=403,
-                detail="Course access required. Please upgrade.",
-                headers={"X-Upgrade-Required": "true"},
-            )
 
     # Check quota
     if user_id:
@@ -152,6 +259,32 @@ def chat(req: ChatRequest, _user: Optional[dict] = Depends(get_current_user)) ->
             raise HTTPException(
                 status_code=429,
                 detail=f"Message limit reached ({FAIR_USE_LIMIT} per 24h). Please try again tomorrow.",
+            )
+
+    # Check entitlement if accessing a paid course
+    if req.course_slug:
+        if not user_id:
+            logger.warning("Entitlement denied: unauthenticated request for course=%s", req.course_slug)
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "message": "Course access required. Please upgrade.",
+                    "upgrade_required": True,
+                    "course_slug": req.course_slug,
+                },
+                headers={"X-Upgrade-Required": "true"},
+            )
+
+        if not check_entitlement(user_id, req.course_slug):
+            logger.warning("Entitlement denied: user=%s course=%s", user_id, req.course_slug)
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "message": "Course access required. Please upgrade.",
+                    "upgrade_required": True,
+                    "course_slug": req.course_slug,
+                },
+                headers={"X-Upgrade-Required": "true"},
             )
 
     try:
@@ -250,36 +383,100 @@ async def billing_webhook(request: Request, stripe_signature: str | None = Heade
     event_id = str(event.get("id", "unknown"))
     logger.info("Stripe webhook received: id=%s type=%s", event_id, event_type)
 
-    # Process checkout.session.completed events
+    # Process purchase grant events.
     if event_type == "checkout.session.completed":
         try:
             session_data = event.get("data", {}).get("object", {})
             session_id = session_data.get("id")
-            client_ref = session_data.get("client_reference_id")
-            metadata = session_data.get("metadata", {})
-            course_slug = metadata.get("course_slug")
+            user_id, course_slug = _extract_user_and_course(session_data)
 
-            if session_id and client_ref and course_slug:
+            if session_id and user_id and course_slug:
                 # Record the event (idempotent)
                 record_purchase_event(
                     stripe_event_id=event_id,
                     stripe_event_type=event_type,
                     stripe_session_id=session_id,
-                    user_id=client_ref,
+                    user_id=user_id,
                     course_slug=course_slug,
                 )
 
                 # Grant entitlement
                 grant_entitlement(
-                    user_id=client_ref,
+                    user_id=user_id,
                     course_slug=course_slug,
                     granted_by="stripe",
                 )
-                logger.info("Granted entitlement via webhook: user=%s course=%s", client_ref, course_slug)
+                logger.info("Granted entitlement via webhook: user=%s course=%s", user_id, course_slug)
             else:
-                logger.warning("Incomplete checkout data: session=%s ref=%s course=%s", session_id, client_ref, course_slug)
+                logger.warning("Incomplete checkout data: session=%s user=%s course=%s", session_id, user_id, course_slug)
         except Exception as exc:
             logger.exception("Failed to process checkout.session.completed: %s", exc)
+
+    if event_type == "payment_intent.succeeded":
+        try:
+            intent_data = event.get("data", {}).get("object", {})
+            payment_intent_id = str(intent_data.get("id", "unknown"))
+            user_id, course_slug = _extract_user_and_course(intent_data)
+
+            if payment_intent_id and user_id and course_slug:
+                record_purchase_event(
+                    stripe_event_id=event_id,
+                    stripe_event_type=event_type,
+                    stripe_session_id=payment_intent_id,
+                    user_id=user_id,
+                    course_slug=course_slug,
+                )
+                grant_entitlement(
+                    user_id=user_id,
+                    course_slug=course_slug,
+                    granted_by="stripe",
+                )
+                logger.info("Granted entitlement via payment intent: user=%s course=%s", user_id, course_slug)
+            else:
+                logger.warning(
+                    "Incomplete payment_intent data: intent=%s user=%s course=%s",
+                    payment_intent_id,
+                    user_id,
+                    course_slug,
+                )
+        except Exception as exc:
+            logger.exception("Failed to process payment_intent.succeeded: %s", exc)
+
+    # Process purchase revoke/refund events.
+    # These handlers require user/course metadata on the Stripe object.
+    if event_type in {
+        "checkout.session.expired",
+        "checkout.session.async_payment_failed",
+        "charge.refunded",
+        "charge.dispute.funds_withdrawn",
+    }:
+        try:
+            event_obj = event.get("data", {}).get("object", {})
+            stripe_obj_id = str(event_obj.get("id", "unknown"))
+            user_id, course_slug = _extract_user_and_course(event_obj)
+
+            if user_id and course_slug:
+                record_purchase_event(
+                    stripe_event_id=event_id,
+                    stripe_event_type=event_type,
+                    stripe_session_id=stripe_obj_id,
+                    user_id=user_id,
+                    course_slug=course_slug,
+                )
+                revoke_entitlement(
+                    user_id=user_id,
+                    course_slug=course_slug,
+                    reason=f"stripe:{event_type}",
+                )
+                logger.info("Revoked entitlement via webhook: user=%s course=%s event=%s", user_id, course_slug, event_type)
+            else:
+                logger.warning(
+                    "Refund/revoke event missing user/course metadata: event=%s object_id=%s",
+                    event_type,
+                    stripe_obj_id,
+                )
+        except Exception as exc:
+            logger.exception("Failed to process %s: %s", event_type, exc)
 
     return {
         "ok": True,
@@ -348,6 +545,83 @@ async def billing_checkout(
     return BillingCheckoutResponse(
         checkout_url=str(checkout_url),
         session_id=str(session_id),
+        publishable_key=STRIPE_PUBLISHABLE_KEY,
+    )
+
+
+@app.post("/billing/payment-intent", response_model=BillingPaymentIntentResponse)
+async def billing_payment_intent(
+    req: BillingPaymentIntentRequest,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> BillingPaymentIntentResponse:
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Stripe is not configured")
+    if not STRIPE_SECRET_KEY.startswith("sk_"):
+        raise HTTPException(
+            status_code=503,
+            detail="Stripe secret key is invalid. Set STRIPE_SECRET_KEY to an sk_test_ or sk_live_ key.",
+        )
+
+    user_id = _current_user_id(_user)
+    user_email = (_user or {}).get("email")
+
+    try:
+        price_resp = await _stripe_request("GET", f"/prices/{req.price_id}")
+    except httpx.HTTPError as exc:
+        logger.exception("Stripe price lookup failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Stripe price lookup failed") from exc
+
+    if price_resp.status_code >= 400:
+        logger.error("Stripe price lookup error (%s): %s", price_resp.status_code, price_resp.text)
+        raise HTTPException(status_code=502, detail="Could not load Stripe price")
+
+    price_payload = price_resp.json()
+    unit_amount = price_payload.get("unit_amount")
+    currency = str(price_payload.get("currency", "usd")).lower()
+    active = bool(price_payload.get("active", False))
+
+    if not active or not isinstance(unit_amount, int) or unit_amount <= 0:
+        raise HTTPException(status_code=400, detail="Selected Stripe price is invalid or inactive")
+
+    amount = unit_amount * req.quantity
+    metadata: dict[str, str] = {}
+    if req.course_slug:
+        metadata["course_slug"] = req.course_slug
+    if user_id:
+        metadata["user_id"] = user_id
+
+    form_data: dict[str, str] = {
+        "amount": str(amount),
+        "currency": currency,
+        "automatic_payment_methods[enabled]": "true",
+    }
+
+    if user_email:
+        form_data["receipt_email"] = str(user_email)
+
+    for key, value in metadata.items():
+        form_data[f"metadata[{key}]"] = value
+
+    try:
+        intent_resp = await _stripe_request("POST", "/payment_intents", data=form_data)
+    except httpx.HTTPError as exc:
+        logger.exception("Stripe payment intent request failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Stripe payment intent request failed") from exc
+
+    if intent_resp.status_code >= 400:
+        logger.error("Stripe payment intent error (%s): %s", intent_resp.status_code, intent_resp.text)
+        raise HTTPException(status_code=502, detail="Stripe payment intent creation failed")
+
+    intent_payload = intent_resp.json()
+    payment_intent_id = intent_payload.get("id")
+    client_secret = intent_payload.get("client_secret")
+
+    if not payment_intent_id or not client_secret:
+        raise HTTPException(status_code=502, detail="Stripe payment intent response missing fields")
+
+    return BillingPaymentIntentResponse(
+        payment_intent_id=str(payment_intent_id),
+        client_secret=str(client_secret),
         publishable_key=STRIPE_PUBLISHABLE_KEY,
     )
 

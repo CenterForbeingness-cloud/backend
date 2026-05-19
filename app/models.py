@@ -66,6 +66,9 @@ class CourseItem(BaseModel):
     title: str
     description: str
     week_count: int
+    price_id: Optional[str] = None
+    unit_amount_cents: Optional[int] = None
+    currency: Optional[str] = None
 
 
 class CourseListResponse(BaseModel):
@@ -89,6 +92,18 @@ class BillingCheckoutRequest(BaseModel):
 class BillingCheckoutResponse(BaseModel):
     checkout_url: str
     session_id: str
+    publishable_key: Optional[str] = None
+
+
+class BillingPaymentIntentRequest(BaseModel):
+    price_id: str = Field(..., min_length=1)
+    quantity: int = Field(default=1, ge=1, le=10)
+    course_slug: Optional[str] = None
+
+
+class BillingPaymentIntentResponse(BaseModel):
+    payment_intent_id: str
+    client_secret: str
     publishable_key: Optional[str] = None
 
 

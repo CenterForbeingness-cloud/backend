@@ -1,9 +1,8 @@
 """
-courses.py — Course catalog built from the rag/raw/courses/ directory structure.
+courses.py — Course catalog service.
 
-Scans:
-  rag/raw/base/                               always-on grounding (not a listed course)
-  rag/raw/courses/<course_slug>/week-NN/      one course per slug directory
+Primary source: Supabase course tables when SUPABASE_DB_URL is configured.
+Fallback: rag/raw/courses/ directory structure for local development.
 
 Returns plain dicts so callers can construct Pydantic models from them.
 """
@@ -13,9 +12,24 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from app.config import SUPABASE_DB_URL, logger
+
 
 # Default: three levels up from backend/app/ project root rag/raw/courses
 _DEFAULT_COURSES_DIR = Path(__file__).parent.parent.parent / "rag" / "raw" / "courses"
+
+
+def _get_db_connection():
+    if not SUPABASE_DB_URL:
+        raise RuntimeError("SUPABASE_DB_URL not configured")
+
+    import psycopg
+
+    return psycopg.connect(SUPABASE_DB_URL, autocommit=True, connect_timeout=5)
+
+
+def _default_description(week_count: int) -> str:
+    return f"{week_count} week{'s' if week_count != 1 else ''} of guided practice"
 
 
 def _courses_dir() -> Path:
@@ -40,8 +54,126 @@ def _parse_week_number(dir_name: str) -> Optional[int]:
     return None
 
 
+def _list_courses_from_db() -> list[dict]:
+    with _get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                c.course_slug,
+                c.title,
+                c.description,
+                COUNT(DISTINCT w.id) AS week_count,
+                p.provider_price_id,
+                p.unit_amount_cents,
+                p.currency
+            FROM public.courses c
+            LEFT JOIN public.course_weeks w ON w.course_slug = c.course_slug
+            LEFT JOIN public.course_products p
+                ON p.course_slug = c.course_slug
+               AND p.is_active = true
+            WHERE c.is_published = true
+            GROUP BY
+                c.course_slug,
+                c.title,
+                c.description,
+                p.provider_price_id,
+                p.unit_amount_cents,
+                p.currency
+            ORDER BY c.title, c.course_slug
+            """
+        )
+        rows = cur.fetchall()
+
+    results = []
+    for row in rows:
+        week_count = int(row[3] or 0)
+        description = str(row[2] or "").strip() or _default_description(week_count)
+        results.append(
+            {
+                "course_slug": row[0],
+                "title": row[1],
+                "description": description,
+                "week_count": week_count,
+                "price_id": row[4],
+                "unit_amount_cents": row[5],
+                "currency": row[6],
+            }
+        )
+
+    return results
+
+
+def _course_detail_from_db(course_slug: str) -> Optional[dict]:
+    with _get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT title
+            FROM public.courses
+            WHERE course_slug = %s
+              AND is_published = true
+            """,
+            (course_slug,),
+        )
+        course_row = cur.fetchone()
+        if course_row is None:
+            return None
+
+        cur.execute(
+            """
+            SELECT
+                w.week_number,
+                w.title AS week_title,
+                l.lesson_number,
+                l.title AS lesson_title,
+                l.content_ref
+            FROM public.course_weeks w
+            LEFT JOIN public.course_lessons l ON l.week_id = w.id
+            WHERE w.course_slug = %s
+            ORDER BY w.week_number, l.lesson_number
+            """,
+            (course_slug,),
+        )
+        rows = cur.fetchall()
+
+    weeks_by_number: dict[int, dict] = {}
+    for week_number, week_title, lesson_number, lesson_title, content_ref in rows:
+        week = weeks_by_number.setdefault(
+            int(week_number),
+            {
+                "week_number": int(week_number),
+                "title": str(week_title or f"Week {week_number}"),
+                "lessons": [],
+            },
+        )
+
+        if lesson_number is None:
+            continue
+
+        filename = str(content_ref).strip() if content_ref else f"lesson-{int(lesson_number):02d}"
+        lesson_title_value = str(lesson_title or filename).strip() or filename
+        week["lessons"].append(
+            {
+                "lesson_number": int(lesson_number),
+                "title": lesson_title_value,
+                "filename": filename,
+            }
+        )
+
+    return {
+        "course_slug": course_slug,
+        "title": str(course_row[0]),
+        "weeks": [weeks_by_number[number] for number in sorted(weeks_by_number)],
+    }
+
+
 def list_courses() -> list[dict]:
     """Return a list of course summary dicts."""
+    if SUPABASE_DB_URL:
+        try:
+            return _list_courses_from_db()
+        except Exception as exc:
+            logger.exception("Falling back to filesystem course catalog: %s", exc)
+
     courses_dir = _courses_dir()
     if not courses_dir.exists():
         return []
@@ -60,10 +192,11 @@ def list_courses() -> list[dict]:
             {
                 "course_slug": course_slug,
                 "title": _slug_to_title(course_slug),
-                "description": (
-                    f"{week_count} week{'s' if week_count != 1 else ''} of guided practice"
-                ),
+                "description": _default_description(week_count),
                 "week_count": week_count,
+                "price_id": None,
+                "unit_amount_cents": None,
+                "currency": None,
             }
         )
     return results
@@ -71,6 +204,14 @@ def list_courses() -> list[dict]:
 
 def get_course_detail(course_slug: str) -> Optional[dict]:
     """Return full course detail dict with weeks and lessons, or None if not found."""
+    if SUPABASE_DB_URL:
+        try:
+            detail = _course_detail_from_db(course_slug)
+            if detail is not None:
+                return detail
+        except Exception as exc:
+            logger.exception("Falling back to filesystem course detail for %s: %s", course_slug, exc)
+
     courses_dir = _courses_dir()
     course_dir = courses_dir / course_slug
     if not course_dir.exists() or not course_dir.is_dir():
