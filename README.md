@@ -1,6 +1,6 @@
-﻿# Sentient Backend (Bare Bones)
+﻿# Sentient Backend
 
-Minimal FastAPI backend for chat MVP.
+FastAPI backend for the AI chat companion, adaptive memory, progress tracking, and support content.
 
 ## Current Backend Layout
 
@@ -15,6 +15,13 @@ Minimal FastAPI backend for chat MVP.
 Backend is deployed as a separate service from the Flutter app.
 Flutter (Dart) connects to this backend over HTTP/WebSocket APIs.
 Keep frontend and backend release pipelines independent.
+
+Companion-first product direction:
+
+- `/chat` is the main user-facing interface.
+- Memory, goals, habits, preferences, and check-ins should be treated as first-class backend concepts.
+- Courses remain supported as structured learning content, but they are secondary to the companion experience.
+- Notifications, summaries, reminders, and recommendation logic should grow around the user profile rather than around a course catalog.
 
 ## Endpoints
 
@@ -125,15 +132,18 @@ Environment flags for scaffold control:
 
 ## Course Catalog And Billing
 
+The backend course catalog is still available, but it now serves the broader companion experience as support content rather than the app's primary product.
+
 The backend course catalog now prefers the Supabase course tables when `SUPABASE_DB_URL` is configured.
 If that database connection is unavailable, it falls back to the local `rag/raw/courses/` directory so development still works.
 
-The pricing flow is course-first:
+The pricing flow should remain course-aware, but the product story is companion-first:
 
 - `GET /courses` returns published course metadata plus pricing fields when present in the database.
 - `GET /entitlements` returns the authenticated user's owned course slugs.
 - `POST /billing/payment-intent` and `POST /billing/checkout` both accept a `course_slug` so the backend can attach purchase metadata.
-- The frontend pricing screen now renders from the course catalog instead of hardcoded cards.
+- Future pricing tiers may also cover companion features such as advanced memory, check-ins, summaries, and voice.
+- The frontend pricing screen can render both companion tiers and course support content as the product evolves.
 
 For Supabase deployments, the relevant schema is documented in `backend/sql/supabase_courses_billing_rls.sql`.
 
@@ -162,19 +172,23 @@ Stripe CLI and webhook testing guide:
 
 ## Next Backend Flow (Courses and Payments)
 
-The next backend milestone is a course-aware, purchase-ownership, and entitlement-gated request path.
+The next backend milestone is a companion-aware request path that still supports course purchases and entitlement gating.
 
 Required request sequence for protected chat:
 
 1. Validate Supabase JWT and resolve `user_id`.
 2. Validate request payload (`session_id`, `message`, optional `course_slug`, `week`).
 3. Apply fair-use limits for abuse prevention (internal guardrail).
-4. Enforce course ownership entitlement when `course_slug` is present.
-5. Build context (base script, base transcript, selected course/week, retrieved chunks).
-6. Generate AI response and persist message and usage events.
+4. Load companion memory and profile context.
+5. Enforce course ownership entitlement when `course_slug` is present.
+6. Build context in priority order: base script, base transcript, selected course/week, retrieved chunks, and conversation history.
+7. Generate AI response and persist message, usage, and progress events.
 
 Recommended new backend modules:
 
+- `app/memory.py` companion profile, goals, habits, and check-in history
+- `app/checkins.py` daily and scheduled check-in orchestration
+- `app/recommendations.py` adaptive suggestions and next-step planning
 - `app/courses.py` course catalog and lesson service
 - `app/entitlements.py` entitlement checks and gating rules
 - `app/billing.py` checkout and webhook reconciliation
