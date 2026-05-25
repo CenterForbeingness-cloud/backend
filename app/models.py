@@ -19,6 +19,7 @@ class ChatResponse(BaseModel):
     reply: str
     provider_used: str
     memory_size: int
+    day_number: Optional[int] = None
 
 
 class CreateSessionRequest(BaseModel):
@@ -80,6 +81,12 @@ class CourseDetailResponse(BaseModel):
     course_slug: str
     title: str
     weeks: list[WeekItem]
+
+
+class CourseProgressResponse(BaseModel):
+    course_slug: str
+    current_day_number: int
+    max_day_number: Optional[int] = None
 
 
 class BillingCheckoutRequest(BaseModel):

@@ -6,6 +6,7 @@
 -- After this migration:
 --   1. INSERT INTO public.courses (...) for your course_slug
 --   2. python scripts/import_daily_schedule.py --course-slug <slug> --file <path>
+--   3. Run supabase_user_course_progress.sql for per-user current day
 --
 -- Safe to run standalone: creates public.courses if missing (same shape as
 -- supabase_courses_billing_rls.sql). If you already ran the full billing migration,

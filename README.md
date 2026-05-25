@@ -9,6 +9,7 @@ FastAPI backend for the AI chat companion, adaptive memory, progress tracking, a
 - `app/ai.py` OpenAI/Claude routing and safe fallback replies
 - `app/storage.py` storage abstraction (in-memory or Postgres)
 - `app/daily_schedule.py` daily schedule parse, import, and chat context
+- `app/course_progress.py` per-user current day for schedule courses
 - `app/config.py` app/environment configuration
 - `scripts/import_daily_schedule.py` import `schedules/*.txt` into Postgres
 
@@ -37,6 +38,8 @@ Companion-first product direction:
 - `POST /billing/payment-intent`
 - `GET /courses`
 - `GET /courses/{course_slug}`
+- `GET /courses/{course_slug}/progress`
+- `POST /courses/{course_slug}/progress/advance`
 - `GET /entitlements`
 - `GET /usage`
 
@@ -158,6 +161,7 @@ SQL setup files:
 - `backend/sql/supabase_chat_rls.sql` for chat session/message schema and RLS
 - `backend/sql/supabase_courses_billing_rls.sql` for course catalog, Stripe purchase ownership, entitlements, and billing event tables
 - `backend/sql/supabase_course_daily_schedule.sql` for day-by-day course schedule rows (imported from external text files)
+- `backend/sql/supabase_user_course_progress.sql` for per-user current day in a schedule course
 
 ## Daily Course Schedule
 
@@ -177,36 +181,45 @@ Migration file: `backend/sql/supabase_course_daily_schedule.sql` (safe to run st
 ### Setup checklist
 
 1. Run `backend/sql/supabase_course_daily_schedule.sql` in Supabase.
-2. Set `SUPABASE_DB_URL` in `backend/.env`.
-3. Insert a catalog row, e.g. `mindful-foundations` (SQL in `schedules/README.md`).
-4. Import from `backend/`:
+2. Run `backend/sql/supabase_user_course_progress.sql`.
+3. Set `SUPABASE_DB_URL` in `backend/.env`.
+4. Insert a catalog row, e.g. `mindful-foundations` (SQL in `schedules/README.md`).
+5. Import from `backend/`:
 
    ```bash
    python scripts/import_daily_schedule.py --course-slug mindful-foundations --file ../schedules/mindful-foundations.example.txt
    ```
 
-5. Confirm rows: `SELECT * FROM public.course_daily_schedule WHERE course_slug = 'mindful-foundations' ORDER BY day_number;`
+6. Confirm rows: `SELECT * FROM public.course_daily_schedule WHERE course_slug = 'mindful-foundations' ORDER BY day_number;`
+
+### Schedule days vs calendar dates
+
+`current_day_number` is the **schedule index** (`Day 1`, `Day 2`, … in the imported file), not “today’s date.” Users stay on day 2 until `POST /courses/{slug}/progress/advance` (or an explicit `day_number` on `/chat`). Calendar-based auto-advance is not implemented; see `schedules/README.md`.
 
 ### Chat behavior
 
-`POST /chat` accepts optional `day_number` (with `course_slug`). When set, the backend loads that day from the database and prepends it to retrieved context before the AI call. Pinecone remains optional for broader course questions.
+With `course_slug` and an authenticated entitled user, the backend resolves the schedule day from `user_course_progress` (default day 1 on first chat). Optional `day_number` on the request overrides stored progress.
 
-Example body:
+The chat response includes `day_number` — the day injected into context.
 
 ```json
 {
   "session_id": "session-abc",
   "message": "What should I focus on today?",
-  "course_slug": "mindful-foundations",
-  "day_number": 1
+  "course_slug": "mindful-foundations"
 }
 ```
 
-Requires course entitlement when `AUTH_ENFORCED=true` and `course_slug` is set. User progress (server-side “current day”) is not implemented yet.
+Advance after the user completes a day:
+
+`POST /courses/{course_slug}/progress/advance`
+
+Pinecone remains optional for broader course questions.
 
 ### Code
 
 - `app/daily_schedule.py` — parse, `replace_schedule`, `get_schedule_day`
+- `app/course_progress.py` — `resolve_schedule_day_number`, `get_progress`, `advance_day`
 - `scripts/import_daily_schedule.py` — CLI import (replaces all days for a slug)
 
 Stripe env variables expected by backend config:

@@ -36,6 +36,7 @@ from app.models import (
     CourseDetailResponse,
     CourseItem,
     CourseListResponse,
+    CourseProgressResponse,
     CreateSessionRequest,
     EntitlementResponse,
     LessonItem,
@@ -46,6 +47,7 @@ from app.models import (
     WeekItem,
     generate_session_id,
 )
+from app.course_progress import advance_day, get_progress, resolve_schedule_day_number
 from app.daily_schedule import format_day_context, get_schedule_day
 from app.rag import build_context_retriever, load_base_script
 from app.storage import SessionAccessError, build_chat_store
@@ -294,9 +296,13 @@ def chat(req: ChatRequest, _user: Optional[dict] = Depends(get_current_user)) ->
     except SessionAccessError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
+    schedule_day_number = resolve_schedule_day_number(
+        user_id, req.course_slug, req.day_number
+    )
+
     retrieved_context: list[str] = []
-    if req.course_slug and req.day_number:
-        schedule_day = get_schedule_day(req.course_slug, req.day_number)
+    if req.course_slug and schedule_day_number:
+        schedule_day = get_schedule_day(req.course_slug, schedule_day_number)
         if schedule_day:
             retrieved_context.append(format_day_context(schedule_day))
 
@@ -327,6 +333,7 @@ def chat(req: ChatRequest, _user: Optional[dict] = Depends(get_current_user)) ->
         reply=reply,
         provider_used=provider,
         memory_size=memory_size,
+        day_number=schedule_day_number,
     )
 
 
@@ -667,6 +674,62 @@ def get_course_endpoint(course_slug: str) -> CourseDetailResponse:
         title=detail["title"],
         weeks=weeks,
     )
+
+
+@app.get("/courses/{course_slug}/progress", response_model=CourseProgressResponse)
+def get_course_progress_endpoint(
+    course_slug: str,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> CourseProgressResponse:
+    user_id = _current_user_id(_user)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    if not check_entitlement(user_id, course_slug):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "Course access required.",
+                "upgrade_required": True,
+                "course_slug": course_slug,
+            },
+        )
+
+    progress = get_progress(user_id, course_slug)
+    if progress is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No schedule progress for course '{course_slug}'.",
+        )
+
+    return CourseProgressResponse(**progress)
+
+
+@app.post("/courses/{course_slug}/progress/advance", response_model=CourseProgressResponse)
+def advance_course_progress_endpoint(
+    course_slug: str,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> CourseProgressResponse:
+    user_id = _current_user_id(_user)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    if not check_entitlement(user_id, course_slug):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "Course access required.",
+                "upgrade_required": True,
+                "course_slug": course_slug,
+            },
+        )
+
+    progress = advance_day(user_id, course_slug)
+    if progress is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Cannot advance progress for course '{course_slug}'.",
+        )
+
+    return CourseProgressResponse(**progress)
 
 
 @app.get("/entitlements", response_model=EntitlementResponse)
