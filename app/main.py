@@ -46,6 +46,7 @@ from app.models import (
     WeekItem,
     generate_session_id,
 )
+from app.daily_schedule import format_day_context, get_schedule_day
 from app.rag import build_context_retriever, load_base_script
 from app.storage import SessionAccessError, build_chat_store
 from app.entitlements import (
@@ -293,11 +294,19 @@ def chat(req: ChatRequest, _user: Optional[dict] = Depends(get_current_user)) ->
     except SessionAccessError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
-    retrieved_context = context_retriever.retrieve(
-        req.message,
-        top_k=RAG_TOP_K,
-        course_slug=req.course_slug,
-        week_number=req.week_number,
+    retrieved_context: list[str] = []
+    if req.course_slug and req.day_number:
+        schedule_day = get_schedule_day(req.course_slug, req.day_number)
+        if schedule_day:
+            retrieved_context.append(format_day_context(schedule_day))
+
+    retrieved_context.extend(
+        context_retriever.retrieve(
+            req.message,
+            top_k=RAG_TOP_K,
+            course_slug=req.course_slug,
+            week_number=req.week_number,
+        )
     )
 
     try:

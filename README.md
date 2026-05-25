@@ -8,7 +8,9 @@ FastAPI backend for the AI chat companion, adaptive memory, progress tracking, a
 - `app/models.py` request/response schema
 - `app/ai.py` OpenAI/Claude routing and safe fallback replies
 - `app/storage.py` storage abstraction (in-memory or Postgres)
+- `app/daily_schedule.py` daily schedule parse, import, and chat context
 - `app/config.py` app/environment configuration
+- `scripts/import_daily_schedule.py` import `schedules/*.txt` into Postgres
 
 ## Architecture Note
 
@@ -155,6 +157,57 @@ SQL setup files:
 
 - `backend/sql/supabase_chat_rls.sql` for chat session/message schema and RLS
 - `backend/sql/supabase_courses_billing_rls.sql` for course catalog, Stripe purchase ownership, entitlements, and billing event tables
+- `backend/sql/supabase_course_daily_schedule.sql` for day-by-day course schedule rows (imported from external text files)
+
+## Daily Course Schedule
+
+Day-by-day course copy lives in **Postgres** (`course_daily_schedule`), not in `rag/raw/`. Source `.txt` files live in `schedules/` at the repo root and are imported once; the app does not read those files at runtime.
+
+This path is **independent** of the week/lesson catalog and from Pinecone transcript ingest. See **`schedules/README.md`** for the full step-by-step guide.
+
+### Schema
+
+| Table | Purpose |
+|-------|---------|
+| `public.courses` | One row per course (`course_slug` PK). Created by the schedule migration if missing, or by `supabase_courses_billing_rls.sql`. |
+| `public.course_daily_schedule` | One row per day: `course_slug`, `day_number`, optional `day_title`, `content`. |
+
+Migration file: `backend/sql/supabase_course_daily_schedule.sql` (safe to run standalone in Supabase SQL editor).
+
+### Setup checklist
+
+1. Run `backend/sql/supabase_course_daily_schedule.sql` in Supabase.
+2. Set `SUPABASE_DB_URL` in `backend/.env`.
+3. Insert a catalog row, e.g. `mindful-foundations` (SQL in `schedules/README.md`).
+4. Import from `backend/`:
+
+   ```bash
+   python scripts/import_daily_schedule.py --course-slug mindful-foundations --file ../schedules/mindful-foundations.example.txt
+   ```
+
+5. Confirm rows: `SELECT * FROM public.course_daily_schedule WHERE course_slug = 'mindful-foundations' ORDER BY day_number;`
+
+### Chat behavior
+
+`POST /chat` accepts optional `day_number` (with `course_slug`). When set, the backend loads that day from the database and prepends it to retrieved context before the AI call. Pinecone remains optional for broader course questions.
+
+Example body:
+
+```json
+{
+  "session_id": "session-abc",
+  "message": "What should I focus on today?",
+  "course_slug": "mindful-foundations",
+  "day_number": 1
+}
+```
+
+Requires course entitlement when `AUTH_ENFORCED=true` and `course_slug` is set. User progress (server-side “current day”) is not implemented yet.
+
+### Code
+
+- `app/daily_schedule.py` — parse, `replace_schedule`, `get_schedule_day`
+- `scripts/import_daily_schedule.py` — CLI import (replaces all days for a slug)
 
 Stripe env variables expected by backend config:
 
@@ -181,7 +234,7 @@ Required request sequence for protected chat:
 3. Apply fair-use limits for abuse prevention (internal guardrail).
 4. Load companion memory and profile context.
 5. Enforce course ownership entitlement when `course_slug` is present.
-6. Build context in priority order: base script, base transcript, selected course/week, retrieved chunks, and conversation history.
+6. Build context in priority order: base script, daily schedule day (if `day_number`), selected course/week, retrieved chunks, and conversation history.
 7. Generate AI response and persist message, usage, and progress events.
 
 Recommended new backend modules:
@@ -207,6 +260,6 @@ Minimum additional endpoints:
 
 Chat contract extension target:
 
-- `POST /chat` accepts optional `course_slug` and `week`.
+- `POST /chat` accepts optional `course_slug`, `week_number`, and `day_number`.
 - Backend checks entitlement before course retrieval.
 
