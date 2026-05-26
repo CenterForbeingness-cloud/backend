@@ -199,3 +199,31 @@ def format_day_context(day: dict) -> str:
     if day.get("day_title"):
         header = f"{header}: {day['day_title']}"
     return f"[Course schedule — {header}]\n{day['content']}"
+
+
+def estimate_duration_minutes(content: str) -> int:
+    """Rough guided-practice length from schedule copy (spoken pacing)."""
+    words = len(content.split())
+    minutes = max(2, round(words / 90))
+    return min(minutes, 45)
+
+
+def build_day_welcome(day: dict) -> str:
+    """
+    First assistant message before the user speaks — same shape every day.
+    """
+    day_number = day["day_number"]
+    day_title = day.get("day_title")
+    duration = estimate_duration_minutes(day["content"])
+
+    headline = f"Day {day_number}"
+    if day_title:
+        headline = f"{headline}: {day_title}"
+
+    duration_label = f"{duration} minute{'s' if duration != 1 else ''}"
+
+    return (
+        f"Welcome to {headline}.\n\n"
+        f"Today's practice is about {duration_label}.\n\n"
+        f"When you're ready, tell me how you're feeling or ask to begin."
+    )

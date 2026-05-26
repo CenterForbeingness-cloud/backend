@@ -10,7 +10,12 @@ from __future__ import annotations
 from typing import Optional
 
 from app.config import SUPABASE_DB_URL, logger
-from app.daily_schedule import validate_course_slug
+from app.daily_schedule import (
+    build_day_welcome,
+    estimate_duration_minutes,
+    get_schedule_day,
+    validate_course_slug,
+)
 
 _schema_bootstrapped = False
 
@@ -161,6 +166,30 @@ def resolve_schedule_day_number(
     return get_current_day_number(user_id, course_slug)
 
 
+def _progress_payload(
+    course_slug: str,
+    day_number: int,
+    max_day: Optional[int],
+) -> dict:
+    payload = {
+        "course_slug": course_slug,
+        "current_day_number": day_number,
+        "max_day_number": max_day,
+        "day_title": None,
+        "duration_minutes": None,
+        "welcome_message": None,
+    }
+
+    schedule_day = get_schedule_day(course_slug, day_number)
+    if not schedule_day:
+        return payload
+
+    payload["day_title"] = schedule_day.get("day_title")
+    payload["duration_minutes"] = estimate_duration_minutes(schedule_day["content"])
+    payload["welcome_message"] = build_day_welcome(schedule_day)
+    return payload
+
+
 def get_progress(user_id: str, course_slug: str) -> Optional[dict]:
     """Return progress row for API responses."""
     day = get_current_day_number(user_id, course_slug)
@@ -168,11 +197,7 @@ def get_progress(user_id: str, course_slug: str) -> Optional[dict]:
         return None
 
     max_day = get_max_schedule_day(course_slug)
-    return {
-        "course_slug": course_slug,
-        "current_day_number": day,
-        "max_day_number": max_day,
-    }
+    return _progress_payload(course_slug, day, max_day)
 
 
 def advance_day(user_id: str, course_slug: str) -> Optional[dict]:
@@ -207,11 +232,7 @@ def advance_day(user_id: str, course_slug: str) -> Optional[dict]:
             row = cur.fetchone()
             if not row:
                 return None
-            return {
-                "course_slug": course_slug,
-                "current_day_number": int(row[0]),
-                "max_day_number": max_day,
-            }
+            return _progress_payload(course_slug, int(row[0]), max_day)
     except Exception as exc:
         logger.exception(
             "advance_day failed user=%s course=%s: %s",

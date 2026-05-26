@@ -87,6 +87,9 @@ class CourseProgressResponse(BaseModel):
     course_slug: str
     current_day_number: int
     max_day_number: Optional[int] = None
+    day_title: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    welcome_message: Optional[str] = None
 
 
 class BillingCheckoutRequest(BaseModel):
