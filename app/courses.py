@@ -14,6 +14,19 @@ from typing import Optional
 
 from app.config import SUPABASE_DB_URL, logger
 
+try:
+    from psycopg.errors import UndefinedTable
+except ImportError:  # pragma: no cover
+    UndefinedTable = ()  # type: ignore[misc, assignment]
+
+
+def _log_db_fallback(context: str, exc: Exception) -> None:
+    """Filesystem fallback is expected until course catalog SQL is applied."""
+    if isinstance(exc, UndefinedTable) or "does not exist" in str(exc).lower():
+        logger.warning("%s: using filesystem course catalog (%s)", context, exc)
+        return
+    logger.exception("%s: falling back to filesystem course catalog", context)
+
 
 # Default: three levels up from backend/app/ project root rag/raw/courses
 _DEFAULT_COURSES_DIR = Path(__file__).parent.parent.parent / "rag" / "raw" / "courses"
@@ -25,7 +38,12 @@ def _get_db_connection():
 
     import psycopg
 
-    return psycopg.connect(SUPABASE_DB_URL, autocommit=True, connect_timeout=5)
+    return psycopg.connect(
+        SUPABASE_DB_URL,
+        autocommit=True,
+        connect_timeout=5,
+        prepare_threshold=None,
+    )
 
 
 def _default_description(week_count: int) -> str:
@@ -172,7 +190,7 @@ def list_courses() -> list[dict]:
         try:
             return _list_courses_from_db()
         except Exception as exc:
-            logger.exception("Falling back to filesystem course catalog: %s", exc)
+            _log_db_fallback("list_courses", exc)
 
     courses_dir = _courses_dir()
     if not courses_dir.exists():
@@ -210,7 +228,7 @@ def get_course_detail(course_slug: str) -> Optional[dict]:
             if detail is not None:
                 return detail
         except Exception as exc:
-            logger.exception("Falling back to filesystem course detail for %s: %s", course_slug, exc)
+            _log_db_fallback(f"get_course_detail({course_slug})", exc)
 
     courses_dir = _courses_dir()
     course_dir = courses_dir / course_slug

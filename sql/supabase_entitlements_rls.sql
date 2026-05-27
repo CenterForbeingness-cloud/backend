@@ -1,6 +1,10 @@
 -- Entitlements, Billing, and Admin Schema for Sentient
 -- Purpose: Persist course purchases, user entitlements, and admin audit logs
 -- Security: RLS enabled, parameterized queries only, no injection vectors
+--
+-- Run in Supabase SQL Editor (safe to re-run: IF NOT EXISTS / DROP POLICY IF EXISTS).
+-- Service-role policies use FOR ALL (not "FOR INSERT, UPDATE, DELETE" — invalid in PostgreSQL).
+-- If tables were auto-created by the backend bootstrap, this script adds RLS and patches columns.
 
 -- ============================================================================
 -- COURSE PURCHASES TABLE (immutable purchase records)
@@ -226,8 +230,9 @@ USING (auth.uid() = user_id);
 DROP POLICY IF EXISTS "service_write_entitlements" ON public.user_entitlements;
 CREATE POLICY "service_write_entitlements"
 ON public.user_entitlements
-FOR INSERT, UPDATE, DELETE
+FOR ALL
 TO service_role
+USING (TRUE)
 WITH CHECK (TRUE);
 
 -- PURCHASE_EVENTS RLS: Only service_role can write (backend webhook processor)
@@ -252,8 +257,9 @@ USING (EXISTS (
 DROP POLICY IF EXISTS "service_write_counts" ON public.user_message_counts;
 CREATE POLICY "service_write_counts"
 ON public.user_message_counts
-FOR INSERT, UPDATE, DELETE
+FOR ALL
 TO service_role
+USING (TRUE)
 WITH CHECK (TRUE);
 
 -- ADMIN_USERS RLS: Admin users cannot access via regular authenticated role

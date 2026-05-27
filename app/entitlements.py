@@ -10,16 +10,60 @@ from typing import Optional
 
 from app.config import SUPABASE_DB_URL, logger
 
+# Product SKUs (Stripe) that are not daily-schedule courses.
+PRODUCT_ONLY_SLUGS: frozenset[str] = frozenset({"starter-bundle"})
+
+# Courses unlocked when a bundle SKU is purchased (also lazy-synced on GET /entitlements).
+BUNDLE_INCLUDED_COURSES: dict[str, tuple[str, ...]] = {
+    "starter-bundle": (
+        "mindful-foundations",
+        "week-zero-reset",
+        "deep-calm-protocol",
+        "focus-discipline",
+    ),
+}
 
 _schema_bootstrapped = False
 
 
+def is_product_only_slug(course_slug: str) -> bool:
+    return course_slug in PRODUCT_ONLY_SLUGS
+
+
+def entitlement_grants_for_product(course_slug: str) -> list[str]:
+    """Slugs to grant for a purchase (bundle expands to included courses)."""
+    grants = [course_slug]
+    grants.extend(BUNDLE_INCLUDED_COURSES.get(course_slug, ()))
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for slug in grants:
+        if slug not in seen:
+            seen.add(slug)
+            ordered.append(slug)
+    return ordered
+
+
+def sync_bundle_child_entitlements(user_id: str, owned: list[str]) -> list[str]:
+    """Ensure bundle purchases also have rows for included courses (idempotent)."""
+    owned_set = set(owned)
+    changed = False
+    for slug in list(owned_set):
+        for child in BUNDLE_INCLUDED_COURSES.get(slug, ()):
+            if child in owned_set:
+                continue
+            if grant_entitlement(user_id=user_id, course_slug=child, granted_by="stripe"):
+                owned_set.add(child)
+                changed = True
+    if changed:
+        return sorted(owned_set)
+    return owned
+
+
 def _get_db_connection():
-    """Get a Postgres connection. Used internally by all functions."""
-    if not SUPABASE_DB_URL:
-        raise RuntimeError("SUPABASE_DB_URL not configured")
-    import psycopg
-    return psycopg.connect(SUPABASE_DB_URL, autocommit=True, connect_timeout=5)
+    """Get a Postgres connection from the shared pool."""
+    from app.db import db_connection
+
+    return db_connection()
 
 
 def _ensure_entitlements_schema() -> None:
@@ -42,6 +86,20 @@ def _ensure_entitlements_schema() -> None:
                 revoked_at TIMESTAMPTZ,
                 revoked_by TEXT,
                 revoke_reason TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS public.course_purchases (
+                id BIGSERIAL PRIMARY KEY,
+                user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+                course_slug TEXT NOT NULL,
+                purchase_source TEXT NOT NULL DEFAULT 'stripe',
+                stripe_session_id TEXT,
+                stripe_payment_intent_id TEXT,
+                purchased_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+                refunded_at TIMESTAMPTZ
             )
             """
         )
@@ -81,7 +139,37 @@ def _ensure_entitlements_schema() -> None:
         cur.execute("ALTER TABLE public.purchase_events ADD COLUMN IF NOT EXISTS processing_error TEXT")
         cur.execute("ALTER TABLE public.purchase_events ADD COLUMN IF NOT EXISTS idempotency_key TEXT")
 
+        cur.execute(
+            "ALTER TABLE public.course_purchases ADD COLUMN IF NOT EXISTS purchase_source TEXT NOT NULL DEFAULT 'stripe'"
+        )
+        cur.execute(
+            "ALTER TABLE public.course_purchases ADD COLUMN IF NOT EXISTS stripe_session_id TEXT"
+        )
+        cur.execute(
+            "ALTER TABLE public.course_purchases ADD COLUMN IF NOT EXISTS stripe_payment_intent_id TEXT"
+        )
+        cur.execute(
+            "ALTER TABLE public.course_purchases ADD COLUMN IF NOT EXISTS purchased_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())"
+        )
+        cur.execute(
+            "ALTER TABLE public.course_purchases ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ"
+        )
+
         # Helpful indexes
+        cur.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_course_purchases_stripe_session_unique
+            ON public.course_purchases(stripe_session_id)
+            WHERE stripe_session_id IS NOT NULL AND refunded_at IS NULL
+            """
+        )
+        cur.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_course_purchases_stripe_pi_unique
+            ON public.course_purchases(stripe_payment_intent_id)
+            WHERE stripe_payment_intent_id IS NOT NULL AND refunded_at IS NULL
+            """
+        )
         cur.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_user_entitlements_active_unique
@@ -137,7 +225,27 @@ def check_entitlement(user_id: str, course_slug: str) -> bool:
                 (user_id, course_slug),
             )
             row = cur.fetchone()
-            return row is not None
+            if row is not None:
+                return True
+
+            for bundle_slug, children in BUNDLE_INCLUDED_COURSES.items():
+                if course_slug not in children:
+                    continue
+                cur.execute(
+                    """
+                    SELECT 1
+                    FROM public.user_entitlements
+                    WHERE user_id = %s
+                      AND course_slug = %s
+                      AND revoked_at IS NULL
+                      AND (expires_at IS NULL OR expires_at > timezone('utc'::text, now()))
+                    LIMIT 1
+                    """,
+                    (user_id, bundle_slug),
+                )
+                if cur.fetchone() is not None:
+                    return True
+            return False
     except Exception as exc:
         logger.exception("check_entitlement failed for user=%s course=%s: %s", user_id, course_slug, exc)
         return False
@@ -168,7 +276,8 @@ def get_user_entitlements(user_id: str) -> list[str]:
                 (user_id,),
             )
             rows = cur.fetchall()
-            return [row[0] for row in rows]
+            owned = [row[0] for row in rows]
+            return sync_bundle_child_entitlements(user_id, owned)
     except Exception as exc:
         logger.exception("get_user_entitlements failed for user=%s: %s", user_id, exc)
         return []
@@ -263,33 +372,155 @@ def revoke_entitlement(user_id: str, course_slug: str, reason: str = "admin_revo
         return False
 
 
+def record_course_purchase(
+    user_id: str,
+    course_slug: str,
+    *,
+    purchase_source: str = "stripe",
+    stripe_session_id: Optional[str] = None,
+    stripe_payment_intent_id: Optional[str] = None,
+) -> bool:
+    """
+    Persist an immutable purchase row (idempotent on Stripe session or payment intent).
+    """
+    _ensure_entitlements_schema()
+    try:
+        with _get_db_connection() as conn, conn.cursor() as cur:
+            if stripe_session_id:
+                cur.execute(
+                    """
+                    SELECT id FROM public.course_purchases
+                    WHERE stripe_session_id = %s AND refunded_at IS NULL
+                    LIMIT 1
+                    """,
+                    (stripe_session_id,),
+                )
+                if cur.fetchone() is not None:
+                    return True
+
+            if stripe_payment_intent_id:
+                cur.execute(
+                    """
+                    SELECT id FROM public.course_purchases
+                    WHERE stripe_payment_intent_id = %s AND refunded_at IS NULL
+                    LIMIT 1
+                    """,
+                    (stripe_payment_intent_id,),
+                )
+                if cur.fetchone() is not None:
+                    return True
+
+            cur.execute(
+                """
+                INSERT INTO public.course_purchases (
+                    user_id, course_slug, purchase_source,
+                    stripe_session_id, stripe_payment_intent_id
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    user_id,
+                    course_slug,
+                    purchase_source,
+                    stripe_session_id,
+                    stripe_payment_intent_id,
+                ),
+            )
+            logger.info(
+                "Recorded course purchase user=%s course=%s session=%s intent=%s",
+                user_id,
+                course_slug,
+                stripe_session_id,
+                stripe_payment_intent_id,
+            )
+            return True
+    except Exception as exc:
+        if "unique constraint" in str(exc).lower() or "duplicate" in str(exc).lower():
+            return True
+        logger.exception(
+            "record_course_purchase failed user=%s course=%s: %s",
+            user_id,
+            course_slug,
+            exc,
+        )
+        return False
+
+
+def mark_course_purchase_refunded(
+    user_id: str,
+    course_slug: str,
+    *,
+    stripe_session_id: Optional[str] = None,
+    stripe_payment_intent_id: Optional[str] = None,
+) -> bool:
+    """Mark matching purchase rows refunded (best-effort when Stripe metadata is sparse)."""
+    _ensure_entitlements_schema()
+    try:
+        with _get_db_connection() as conn, conn.cursor() as cur:
+            if stripe_session_id:
+                cur.execute(
+                    """
+                    UPDATE public.course_purchases
+                    SET refunded_at = timezone('utc'::text, now())
+                    WHERE user_id = %s
+                      AND course_slug = %s
+                      AND stripe_session_id = %s
+                      AND refunded_at IS NULL
+                    """,
+                    (user_id, course_slug, stripe_session_id),
+                )
+            elif stripe_payment_intent_id:
+                cur.execute(
+                    """
+                    UPDATE public.course_purchases
+                    SET refunded_at = timezone('utc'::text, now())
+                    WHERE user_id = %s
+                      AND course_slug = %s
+                      AND stripe_payment_intent_id = %s
+                      AND refunded_at IS NULL
+                    """,
+                    (user_id, course_slug, stripe_payment_intent_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE public.course_purchases
+                    SET refunded_at = timezone('utc'::text, now())
+                    WHERE user_id = %s
+                      AND course_slug = %s
+                      AND refunded_at IS NULL
+                    """,
+                    (user_id, course_slug),
+                )
+            return True
+    except Exception as exc:
+        logger.exception(
+            "mark_course_purchase_refunded failed user=%s course=%s: %s",
+            user_id,
+            course_slug,
+            exc,
+        )
+        return False
+
+
 def record_purchase_event(
     stripe_event_id: str,
     stripe_event_type: str,
     stripe_session_id: str,
     user_id: str,
     course_slug: str,
-) -> bool:
+) -> str:
     """
     Record a purchase event for audit/idempotency.
-    
-    If stripe_event_id already exists, returns True (idempotent).
-    
-    Args:
-        stripe_event_id: Stripe event ID (e.g. 'evt_...')
-        stripe_event_type: Event type (e.g. 'checkout.session.completed')
-        stripe_session_id: Stripe session ID
-        user_id: Supabase user ID
-        course_slug: Course being purchased
-    
+
     Returns:
-        True if recorded or already exists, False on error
+        "new" — first time this Stripe event id was seen
+        "duplicate" — event already recorded (skip grant side effects)
+        "error" — database failure
     """
     _ensure_entitlements_schema()
     try:
         with _get_db_connection() as conn, conn.cursor() as cur:
-            # Try insert with unique stripe_event_id constraint
-            # If already exists, it will raise an integrity error which we catch and ignore
             try:
                 cur.execute(
                     """
@@ -300,14 +531,98 @@ def record_purchase_event(
                     """,
                     (stripe_event_id, stripe_event_type, stripe_session_id, user_id, course_slug),
                 )
-                logger.info("Recorded purchase event event_id=%s user=%s course=%s", stripe_event_id, user_id, course_slug)
-                return True
+                logger.info(
+                    "Recorded purchase event event_id=%s user=%s course=%s",
+                    stripe_event_id,
+                    user_id,
+                    course_slug,
+                )
+                return "new"
             except Exception as e:
-                # Check if it's a unique constraint violation (event already recorded)
                 if "unique constraint" in str(e).lower() or "duplicate" in str(e).lower():
-                    logger.info("Purchase event already recorded (idempotent) event_id=%s", stripe_event_id)
-                    return True
+                    logger.info(
+                        "Purchase event already recorded (idempotent) event_id=%s",
+                        stripe_event_id,
+                    )
+                    return "duplicate"
                 raise
     except Exception as exc:
         logger.exception("record_purchase_event failed event_id=%s: %s", stripe_event_id, exc)
+        return "error"
+
+
+def apply_purchase_grant(
+    user_id: str,
+    course_slug: str,
+    *,
+    stripe_event_id: str,
+    stripe_event_type: str,
+    stripe_reference_id: str,
+    stripe_session_id: Optional[str] = None,
+    stripe_payment_intent_id: Optional[str] = None,
+) -> bool:
+    """
+    Idempotent grant path: record webhook event once, then purchase row + entitlement.
+    """
+    event_status = record_purchase_event(
+        stripe_event_id=stripe_event_id,
+        stripe_event_type=stripe_event_type,
+        stripe_session_id=stripe_reference_id,
+        user_id=user_id,
+        course_slug=course_slug,
+    )
+    if event_status == "duplicate":
+        return True
+    if event_status == "error":
         return False
+
+    if not record_course_purchase(
+        user_id,
+        course_slug,
+        stripe_session_id=stripe_session_id,
+        stripe_payment_intent_id=stripe_payment_intent_id,
+    ):
+        return False
+
+    ok = True
+    for slug in entitlement_grants_for_product(course_slug):
+        if not grant_entitlement(user_id=user_id, course_slug=slug, granted_by="stripe"):
+            ok = False
+    return ok
+
+
+def apply_purchase_revoke(
+    user_id: str,
+    course_slug: str,
+    *,
+    stripe_event_id: str,
+    stripe_event_type: str,
+    stripe_reference_id: str,
+    reason: str,
+    stripe_session_id: Optional[str] = None,
+    stripe_payment_intent_id: Optional[str] = None,
+) -> bool:
+    """Idempotent revoke path for refunds and failed checkouts."""
+    event_status = record_purchase_event(
+        stripe_event_id=stripe_event_id,
+        stripe_event_type=stripe_event_type,
+        stripe_session_id=stripe_reference_id,
+        user_id=user_id,
+        course_slug=course_slug,
+    )
+    if event_status == "error":
+        return False
+    if event_status == "duplicate":
+        return True
+
+    mark_course_purchase_refunded(
+        user_id,
+        course_slug,
+        stripe_session_id=stripe_session_id,
+        stripe_payment_intent_id=stripe_payment_intent_id,
+    )
+    ok = True
+    for slug in entitlement_grants_for_product(course_slug):
+        if not revoke_entitlement(user_id=user_id, course_slug=slug, reason=reason):
+            ok = False
+    return ok

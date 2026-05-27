@@ -30,6 +30,7 @@ Companion-first product direction:
 
 - `GET /health`
 - `POST /chat`
+- `POST /chat/stream` (SSE; scripted daily lessons + streamed LLM for other modes)
 - `POST /sessions`
 - `GET /sessions/{session_id}/messages?limit=50`
 - `DELETE /memory/{session_id}`
@@ -52,6 +53,25 @@ Set `SUPABASE_DB_URL` to your Supabase Postgres connection string to persist cha
 If it is omitted, the backend falls back to in-memory session storage.
 
 If `SUPABASE_DB_URL` is set but invalid/unreachable, startup falls back to in-memory storage.
+
+When Postgres is enabled, the API uses a **connection pool** (`app/db.py`, started on app startup) so `/chat` does not open a new database connection for every query.
+
+## Chat performance
+
+Daily practice was slow (~20s) mainly due to many sequential Supabase round-trips and a large system prompt. Recent changes:
+
+- Pooled Postgres connections
+- Cached schedule days and max day per course
+- Single DB transaction per message append
+- Background quota and progress timestamp updates
+- Smaller prompts for daily lessons (no base script duplicate, 6-message history cap)
+
+See **`docs/CHAT_PERFORMANCE.md`** for targets, measurement commands, and the remaining roadmap (streaming, regional deploy).
+
+Optional env:
+
+- `SCHEDULE_HISTORY_MESSAGES` (default `6`)
+- `CHAT_MODEL` / `CHAT_MODEL_SCHEDULE` (default `gpt-4o-mini`)
 
 ## Quick Start
 
@@ -159,9 +179,12 @@ For persistent chat, add a direct Postgres URL in `.env`:
 SQL setup files:
 
 - `backend/sql/supabase_chat_rls.sql` for chat session/message schema and RLS
-- `backend/sql/supabase_courses_billing_rls.sql` for course catalog, Stripe purchase ownership, entitlements, and billing event tables
+- `backend/sql/supabase_entitlements_rls.sql` for **`course_purchases`**, **`user_entitlements`**, **`purchase_events`**, and RLS (run after local dev bootstrap or on fresh Supabase)
+- `backend/sql/supabase_courses_billing_rls.sql` for course catalog (`course_weeks`, `course_products`, etc.) — optional; filesystem fallback works without it
 - `backend/sql/supabase_course_daily_schedule.sql` for day-by-day course schedule rows (imported from external text files)
 - `backend/sql/supabase_user_course_progress.sql` for per-user current day in a schedule course
+
+Billing status (May 2026): webhooks grant ownership into Postgres; `GET /entitlements` drives Owned/Locked UI; starter bundle PaymentSheet E2E and ownership sync are verified in dev. Prepared-statement pooler errors were addressed by disabling server-side prepares in DB connections. See `STRIPE_PAYMENTS.md` and `PROGRESS_MAY_27_2026.md`.
 
 ## Daily Course Schedule
 
@@ -214,7 +237,7 @@ Advance after the user completes a day:
 
 `POST /courses/{course_slug}/progress/advance`
 
-Pinecone remains optional for broader course questions.
+Daily practice chat uses a dedicated coaching block in the system prompt (today's lesson script, short replies, move into the exercise after check-in). Pinecone is skipped for daily-only chat so transcript chunks do not override the schedule. Week/lesson chat still uses Pinecone when `week_number` is set.
 
 ### Code
 
@@ -236,43 +259,20 @@ Stripe CLI and webhook testing guide:
 
 - `backend/STRIPE_PAYMENTS.md`
 
-## Next Backend Flow (Courses and Payments)
+## Next Backend Flow
 
-The next backend milestone is a companion-aware request path that still supports course purchases and entitlement gating.
+Course purchase and entitlement gating are implemented (`app/entitlements.py`, billing routes in `app/main.py`, gating in `app/chat_service.py`).
 
-Required request sequence for protected chat:
+Next milestones:
 
-1. Validate Supabase JWT and resolve `user_id`.
-2. Validate request payload (`session_id`, `message`, optional `course_slug`, `week`).
-3. Apply fair-use limits for abuse prevention (internal guardrail).
-4. Load companion memory and profile context.
-5. Enforce course ownership entitlement when `course_slug` is present.
-6. Build context in priority order: base script, daily schedule day (if `day_number`), selected course/week, retrieved chunks, and conversation history.
-7. Generate AI response and persist message, usage, and progress events.
+1. **Companion memory and check-ins** — `app/memory.py`, check-in endpoints, recommendations (see `ROADMAP.md`).
+2. **Production billing** — live Stripe keys, public webhook URL, monitoring on failed webhooks.
+3. **DB course catalog** — run `supabase_courses_billing_rls.sql` when ready to move off filesystem + per-env price fallbacks.
 
-Recommended new backend modules:
+Protected chat sequence (already enforced):
 
-- `app/memory.py` companion profile, goals, habits, and check-in history
-- `app/checkins.py` daily and scheduled check-in orchestration
-- `app/recommendations.py` adaptive suggestions and next-step planning
-- `app/courses.py` course catalog and lesson service
-- `app/entitlements.py` entitlement checks and gating rules
-- `app/billing.py` checkout and webhook reconciliation
-- `app/quotas.py` request budgeting and usage counters
-
-Minimum additional endpoints:
-
-- `GET /courses`
-- `GET /courses/{course_slug}`
-- `GET /billing/products`
-- `GET /billing/purchases`
-- `POST /billing/checkout` (course purchase)
-- `POST /billing/webhook`
-- `GET /entitlements`
-- `GET /usage`
-
-Chat contract extension target:
-
-- `POST /chat` accepts optional `course_slug`, `week_number`, and `day_number`.
-- Backend checks entitlement before course retrieval.
+1. Validate JWT → `user_id`
+2. Fair-use quota check
+3. Entitlement check when `course_slug` is set
+4. Build context (schedule day, RAG, history) → generate reply
 
