@@ -19,6 +19,8 @@ Backend is deployed as a separate service from the Flutter app.
 Flutter (Dart) connects to this backend over HTTP/WebSocket APIs.
 Keep frontend and backend release pipelines independent.
 
+For deploying from this monorepo, splitting into a second Git repo, and staging vs production readiness, see **`docs/BACKEND_DEPLOYMENT_AND_REPO_SPLIT.md`**.
+
 Companion-first product direction:
 
 - `/chat` is the main user-facing interface.
