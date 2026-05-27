@@ -16,17 +16,44 @@ from app.daily_schedule import (
     get_schedule_day,
     validate_course_slug,
 )
+from app.entitlements import is_product_only_slug
 
 _schema_bootstrapped = False
 
 
+_max_day_cache: dict[str, Optional[int]] = {}
+
+
+def clear_max_day_cache(course_slug: Optional[str] = None) -> None:
+    if course_slug is None:
+        _max_day_cache.clear()
+    else:
+        _max_day_cache.pop(course_slug, None)
+
+
 def _get_db_connection():
+    from app.db import db_connection
+
+    return db_connection()
+
+
+def touch_course_activity(user_id: str, course_slug: str) -> None:
+    """Update last_activity_at without blocking the chat response path."""
     if not SUPABASE_DB_URL:
-        raise RuntimeError("SUPABASE_DB_URL not configured")
-
-    import psycopg
-
-    return psycopg.connect(SUPABASE_DB_URL, autocommit=True, connect_timeout=5)
+        return
+    validate_course_slug(course_slug)
+    try:
+        with _get_db_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE public.user_course_progress
+                SET last_activity_at = timezone('utc', now())
+                WHERE user_id = %s AND course_slug = %s
+                """,
+                (user_id, course_slug),
+            )
+    except Exception as exc:
+        logger.debug("touch_course_activity failed: %s", exc)
 
 
 def _ensure_progress_schema() -> None:
@@ -64,6 +91,9 @@ def get_max_schedule_day(course_slug: str) -> Optional[int]:
         return None
 
     validate_course_slug(course_slug)
+    if course_slug in _max_day_cache:
+        return _max_day_cache[course_slug]
+
     try:
         with _get_db_connection() as conn, conn.cursor() as cur:
             cur.execute(
@@ -76,8 +106,11 @@ def get_max_schedule_day(course_slug: str) -> Optional[int]:
             )
             row = cur.fetchone()
             if not row or row[0] is None:
+                _max_day_cache[course_slug] = None
                 return None
-            return int(row[0])
+            value = int(row[0])
+            _max_day_cache[course_slug] = value
+            return value
     except Exception as exc:
         logger.warning("get_max_schedule_day failed course=%s: %s", course_slug, exc)
         return None
@@ -95,6 +128,11 @@ def get_current_day_number(user_id: str, course_slug: str) -> Optional[int]:
         return None
 
     validate_course_slug(course_slug)
+    if is_product_only_slug(course_slug):
+        return None
+    if get_max_schedule_day(course_slug) is None:
+        return None
+
     _ensure_progress_schema()
 
     try:
@@ -119,15 +157,6 @@ def get_current_day_number(user_id: str, course_slug: str) -> Optional[int]:
                     (user_id, course_slug),
                 )
                 row = cur.fetchone()
-            else:
-                cur.execute(
-                    """
-                    UPDATE public.user_course_progress
-                    SET last_activity_at = timezone('utc', now())
-                    WHERE user_id = %s AND course_slug = %s
-                    """,
-                    (user_id, course_slug),
-                )
 
             day_number = int(row[0])
     except Exception as exc:
@@ -163,7 +192,11 @@ def resolve_schedule_day_number(
     if not user_id:
         return None
 
-    return get_current_day_number(user_id, course_slug)
+    day = get_current_day_number(user_id, course_slug)
+    if day is None:
+        # Progress row missing or DB error — still run day 1 script if schedule exists
+        return 1
+    return day
 
 
 def _progress_payload(

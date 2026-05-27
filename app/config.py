@@ -10,6 +10,15 @@ logger = logging.getLogger(__name__)
 APP_TITLE = "Sentient Backend"
 APP_VERSION = "0.1.0"
 MAX_MEMORY_MESSAGES = 8
+SCHEDULE_HISTORY_MESSAGES = int(os.getenv("SCHEDULE_HISTORY_MESSAGES", "6"))
+CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4o-mini")
+CHAT_MODEL_SCHEDULE = os.getenv("CHAT_MODEL_SCHEDULE", CHAT_MODEL)
+SCHEDULE_SCRIPT_ENGINE = os.getenv("SCHEDULE_SCRIPT_ENGINE", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 DEFAULT_PROVIDER = os.getenv("AI_PROVIDER", "openai").lower()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL") or os.getenv("DATABASE_URL")

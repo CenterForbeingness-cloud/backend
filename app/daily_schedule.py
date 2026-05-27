@@ -27,6 +27,19 @@ class ScheduleDay:
     content: str
 
 
+_schedule_day_cache: dict[tuple[str, int], dict] = {}
+
+
+def clear_schedule_cache(course_slug: Optional[str] = None) -> None:
+    """Drop cached schedule rows after import or in tests."""
+    if course_slug is None:
+        _schedule_day_cache.clear()
+        return
+    for key in list(_schedule_day_cache):
+        if key[0] == course_slug:
+            del _schedule_day_cache[key]
+
+
 def _get_db_connection():
     if not SUPABASE_DB_URL:
         raise RuntimeError("SUPABASE_DB_URL not configured")
@@ -147,6 +160,12 @@ def replace_schedule(course_slug: str, days: list[ScheduleDay]) -> int:
                     (course_slug, day.day_number, day.day_title, day.content),
                 )
         conn.commit()
+        clear_schedule_cache(course_slug)
+        from app.course_progress import clear_max_day_cache
+        from app.lesson_script import clear_lesson_beats_cache
+
+        clear_max_day_cache(course_slug)
+        clear_lesson_beats_cache()
         return len(days)
     except Exception:
         conn.rollback()
@@ -161,21 +180,23 @@ def get_schedule_day(course_slug: str, day_number: int) -> Optional[dict]:
         return None
 
     validate_course_slug(course_slug)
+    cache_key = (course_slug, day_number)
+    if cache_key in _schedule_day_cache:
+        return _schedule_day_cache[cache_key]
+
     try:
-        conn = _get_db_connection()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT day_number, day_title, content
-                    FROM public.course_daily_schedule
-                    WHERE course_slug = %s AND day_number = %s
-                    """,
-                    (course_slug, day_number),
-                )
-                row = cur.fetchone()
-        finally:
-            conn.close()
+        from app.db import db_connection
+
+        with db_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT day_number, day_title, content
+                FROM public.course_daily_schedule
+                WHERE course_slug = %s AND day_number = %s
+                """,
+                (course_slug, day_number),
+            )
+            row = cur.fetchone()
     except Exception as exc:
         logger.warning(
             "get_schedule_day failed course=%s day=%s: %s",
@@ -187,18 +208,53 @@ def get_schedule_day(course_slug: str, day_number: int) -> Optional[dict]:
 
     if not row:
         return None
-    return {
+    payload = {
         "day_number": row[0],
         "day_title": row[1],
         "content": row[2],
     }
+    _schedule_day_cache[cache_key] = payload
+    return payload
 
 
 def format_day_context(day: dict) -> str:
+    """Legacy context block; prefer build_schedule_system_block for chat prompts."""
     header = f"Day {day['day_number']}"
     if day.get("day_title"):
         header = f"{header}: {day['day_title']}"
     return f"[Course schedule — {header}]\n{day['content']}"
+
+
+_SCHEDULE_COACHING_RULES = """\
+[Daily lesson — STRICT SCRIPT MODE]
+The app already showed today's welcome. Coach ONLY through the numbered lesson script below.
+
+Non-negotiable rules:
+1. Deliver ONE script step per message (split a step across messages only if the step itself has multiple lines, e.g. three breaths).
+2. Keep replies short: about two to four sentences unless the step gives longer guided text to read aloud.
+3. Greetings (hello, hi, hey, good morning, etc.) are NOT small talk — immediately deliver Step 1. Never reply with "Hello! How can I help?" or open chat.
+4. Affirmatives (ready, yes, ok, okay, sure, begin, start, continue, next) mean: deliver the NEXT step you have not yet given in this conversation.
+5. Off-topic messages: one calm redirect sentence, then repeat the current step's instruction. Do not engage the tangent.
+6. Never invent steps, techniques, or timings not in the script. Never teach a different day's lesson.
+7. Do not repeat the app welcome or say "Welcome to Day N" unless they explicitly ask what day it is.
+8. Track which step you last delivered; do not skip ahead unless the script says to move on after their answer or "ready".
+9. When the script's closing step is done, remind them they can tap Complete day in the app.
+"""
+
+
+def build_schedule_system_block(day: dict) -> str:
+    """System-prompt block for /chat when a daily schedule day is active."""
+    day_number = day["day_number"]
+    title = (day.get("day_title") or "Practice").strip()
+    content = day["content"].strip()
+    duration = estimate_duration_minutes(content)
+
+    return (
+        f"{_SCHEDULE_COACHING_RULES}\n"
+        f"[TODAY'S LESSON — Day {day_number}: {title}]\n"
+        f"(About {duration} minutes of guided practice.)\n\n"
+        f"{content}"
+    )
 
 
 def estimate_duration_minutes(content: str) -> int:
@@ -224,6 +280,7 @@ def build_day_welcome(day: dict) -> str:
 
     return (
         f"Welcome to {headline}.\n\n"
-        f"Today's practice is about {duration_label}.\n\n"
-        f"When you're ready, tell me how you're feeling or ask to begin."
+        f"Today's practice is about {duration_label}. "
+        f"We'll follow a fixed step-by-step script.\n\n"
+        f"Reply **ready** to begin, or say **hello** — we'll start at Step 1."
     )

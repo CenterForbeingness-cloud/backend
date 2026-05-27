@@ -48,11 +48,10 @@ def _ensure_quotas_schema() -> bool:
 
 
 def _get_db_connection():
-    """Get a Postgres connection. Used internally by all functions."""
-    if not SUPABASE_DB_URL:
-        raise RuntimeError("SUPABASE_DB_URL not configured")
-    import psycopg
-    return psycopg.connect(SUPABASE_DB_URL, autocommit=True, connect_timeout=5)
+    """Get a Postgres connection from the shared pool."""
+    from app.db import db_connection
+
+    return db_connection()
 
 
 def get_message_count(user_id: str) -> int:
@@ -151,10 +150,10 @@ def increment_message_count(user_id: str) -> bool:
                 VALUES (%s, 1, %s, %s)
                 ON CONFLICT (user_id)
                 DO UPDATE SET
-                    message_count = message_count + 1,
-                    last_updated_at = %s
+                    message_count = user_message_counts.message_count + 1,
+                    last_updated_at = EXCLUDED.last_updated_at
                 """,
-                (user_id, now, now, now),
+                (user_id, now, now),
             )
             return True
     except Exception as exc:

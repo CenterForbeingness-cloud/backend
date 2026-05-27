@@ -6,10 +6,17 @@ import time
 from typing import Optional
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, PlainTextResponse, Response
-from app.ai import generate_reply
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response, StreamingResponse
+from app.chat_service import (
+    iter_llm_sse,
+    iter_scripted_sse,
+    prepare_chat_context,
+    process_chat_turn,
+    produce_reply,
+    finalize_chat_turn,
+)
 from app.auth import get_current_user
 from app.config import (
     APP_TITLE,
@@ -17,8 +24,6 @@ from app.config import (
     CORS_ORIGINS,
     DEFAULT_PROVIDER,
     FAIR_USE_LIMIT,
-    MAX_MEMORY_MESSAGES,
-    RAG_TOP_K,
     STRIPE_PUBLISHABLE_KEY,
     STRIPE_SECRET_KEY,
     STRIPE_WEBHOOK_SECRET,
@@ -47,18 +52,18 @@ from app.models import (
     WeekItem,
     generate_session_id,
 )
-from app.course_progress import advance_day, get_progress, resolve_schedule_day_number
-from app.daily_schedule import format_day_context, get_schedule_day
-from app.rag import build_context_retriever, load_base_script
+from app.course_progress import advance_day, get_progress
+from app.db import close_db_pool, init_db_pool
+from app.rag import build_context_retriever
+from app.lesson_state import reset_lesson_state
 from app.storage import SessionAccessError, build_chat_store
 from app.entitlements import (
+    apply_purchase_grant,
+    apply_purchase_revoke,
     check_entitlement,
     get_user_entitlements,
-    grant_entitlement,
-    record_purchase_event,
-    revoke_entitlement,
 )
-from app.quotas import check_quota, increment_message_count, get_usage_info
+from app.quotas import get_usage_info
 from app.admin_auth import admin_login, verify_totp as verify_admin_totp
 
 logger = logging.getLogger(__name__)
@@ -74,7 +79,16 @@ app.add_middleware(
 
 chat_store = build_chat_store()
 context_retriever = build_context_retriever()
-_BASE_SCRIPT: str | None = load_base_script()
+
+
+@app.on_event("startup")
+def _startup_db_pool() -> None:
+    init_db_pool()
+
+
+@app.on_event("shutdown")
+def _shutdown_db_pool() -> None:
+    close_db_pool()
 
 
 def _verify_stripe_signature(payload: bytes, signature_header: str, secret: str, tolerance_seconds: int = 300) -> bool:
@@ -251,89 +265,61 @@ def billing_return_cancel() -> str:
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest, _user: Optional[dict] = Depends(get_current_user)) -> ChatResponse:
-    provider = req.provider or DEFAULT_PROVIDER
+def chat(
+    req: ChatRequest,
+    background_tasks: BackgroundTasks,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> ChatResponse:
     user_id = _current_user_id(_user)
-
-    # Check quota
-    if user_id:
-        if not check_quota(user_id, FAIR_USE_LIMIT):
-            logger.warning("Quota exceeded: user=%s", user_id)
-            raise HTTPException(
-                status_code=429,
-                detail=f"Message limit reached ({FAIR_USE_LIMIT} per 24h). Please try again tomorrow.",
-            )
-
-    # Check entitlement if accessing a paid course
-    if req.course_slug:
-        if not user_id:
-            logger.warning("Entitlement denied: unauthenticated request for course=%s", req.course_slug)
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "message": "Course access required. Please upgrade.",
-                    "upgrade_required": True,
-                    "course_slug": req.course_slug,
-                },
-                headers={"X-Upgrade-Required": "true"},
-            )
-
-        if not check_entitlement(user_id, req.course_slug):
-            logger.warning("Entitlement denied: user=%s course=%s", user_id, req.course_slug)
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "message": "Course access required. Please upgrade.",
-                    "upgrade_required": True,
-                    "course_slug": req.course_slug,
-                },
-                headers={"X-Upgrade-Required": "true"},
-            )
-
-    try:
-        chat_store.append_message(req.session_id, "user", req.message, user_id)
-        history = chat_store.get_history(req.session_id, MAX_MEMORY_MESSAGES, user_id)
-    except SessionAccessError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-
-    schedule_day_number = resolve_schedule_day_number(
-        user_id, req.course_slug, req.day_number
+    result = process_chat_turn(
+        req,
+        user_id,
+        chat_store,
+        context_retriever,
+        background_tasks,
+        default_provider=DEFAULT_PROVIDER,
     )
-
-    retrieved_context: list[str] = []
-    if req.course_slug and schedule_day_number:
-        schedule_day = get_schedule_day(req.course_slug, schedule_day_number)
-        if schedule_day:
-            retrieved_context.append(format_day_context(schedule_day))
-
-    retrieved_context.extend(
-        context_retriever.retrieve(
-            req.message,
-            top_k=RAG_TOP_K,
-            course_slug=req.course_slug,
-            week_number=req.week_number,
-        )
-    )
-
-    try:
-        reply = generate_reply(req.message, history, provider, retrieved_context, base_script=_BASE_SCRIPT)
-    except Exception as exc:
-        logger.exception("generate_reply failed: %s", exc)
-        raise HTTPException(status_code=500, detail="AI service error. Please try again.") from exc
-
-    chat_store.append_message(req.session_id, "assistant", reply, user_id)
-    memory_size = len(chat_store.get_history(req.session_id, MAX_MEMORY_MESSAGES, user_id))
-
-    # Increment quota counter
-    if user_id:
-        increment_message_count(user_id)
-
     return ChatResponse(
         session_id=req.session_id,
-        reply=reply,
-        provider_used=provider,
-        memory_size=memory_size,
-        day_number=schedule_day_number,
+        reply=result.reply,
+        provider_used=result.provider_used,
+        memory_size=result.memory_size,
+        day_number=result.day_number,
+    )
+
+
+@app.post("/chat/stream")
+def chat_stream(
+    req: ChatRequest,
+    background_tasks: BackgroundTasks,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> StreamingResponse:
+    user_id = _current_user_id(_user)
+
+    def event_generator():
+        ctx = prepare_chat_context(
+            req, user_id, chat_store, default_provider=DEFAULT_PROVIDER
+        )
+        reply, provider_used, scripted = produce_reply(ctx, context_retriever)
+        if scripted:
+            result = finalize_chat_turn(
+                ctx,
+                reply,
+                chat_store,
+                background_tasks,
+                provider_used=provider_used,
+                scripted=True,
+            )
+            yield from iter_scripted_sse(result, req.session_id)
+        else:
+            yield from iter_llm_sse(
+                ctx, context_retriever, chat_store, background_tasks
+            )
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
@@ -342,6 +328,7 @@ def clear_memory(session_id: str, _user: Optional[dict] = Depends(get_current_us
     user_id = _current_user_id(_user)
     try:
         chat_store.clear_session(session_id, user_id)
+        reset_lesson_state(session_id)
     except SessionAccessError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return {"ok": True, "session_id": session_id}
@@ -407,22 +394,25 @@ async def billing_webhook(request: Request, stripe_signature: str | None = Heade
             user_id, course_slug = _extract_user_and_course(session_data)
 
             if session_id and user_id and course_slug:
-                # Record the event (idempotent)
-                record_purchase_event(
+                if apply_purchase_grant(
+                    user_id,
+                    course_slug,
                     stripe_event_id=event_id,
                     stripe_event_type=event_type,
+                    stripe_reference_id=session_id,
                     stripe_session_id=session_id,
-                    user_id=user_id,
-                    course_slug=course_slug,
-                )
-
-                # Grant entitlement
-                grant_entitlement(
-                    user_id=user_id,
-                    course_slug=course_slug,
-                    granted_by="stripe",
-                )
-                logger.info("Granted entitlement via webhook: user=%s course=%s", user_id, course_slug)
+                ):
+                    logger.info(
+                        "Granted entitlement via webhook: user=%s course=%s",
+                        user_id,
+                        course_slug,
+                    )
+                else:
+                    logger.error(
+                        "Failed to grant entitlement via checkout webhook: user=%s course=%s",
+                        user_id,
+                        course_slug,
+                    )
             else:
                 logger.warning("Incomplete checkout data: session=%s user=%s course=%s", session_id, user_id, course_slug)
         except Exception as exc:
@@ -435,19 +425,25 @@ async def billing_webhook(request: Request, stripe_signature: str | None = Heade
             user_id, course_slug = _extract_user_and_course(intent_data)
 
             if payment_intent_id and user_id and course_slug:
-                record_purchase_event(
+                if apply_purchase_grant(
+                    user_id,
+                    course_slug,
                     stripe_event_id=event_id,
                     stripe_event_type=event_type,
-                    stripe_session_id=payment_intent_id,
-                    user_id=user_id,
-                    course_slug=course_slug,
-                )
-                grant_entitlement(
-                    user_id=user_id,
-                    course_slug=course_slug,
-                    granted_by="stripe",
-                )
-                logger.info("Granted entitlement via payment intent: user=%s course=%s", user_id, course_slug)
+                    stripe_reference_id=payment_intent_id,
+                    stripe_payment_intent_id=payment_intent_id,
+                ):
+                    logger.info(
+                        "Granted entitlement via payment intent: user=%s course=%s",
+                        user_id,
+                        course_slug,
+                    )
+                else:
+                    logger.error(
+                        "Failed to grant entitlement via payment_intent webhook: user=%s course=%s",
+                        user_id,
+                        course_slug,
+                    )
             else:
                 logger.warning(
                     "Incomplete payment_intent data: intent=%s user=%s course=%s",
@@ -472,19 +468,29 @@ async def billing_webhook(request: Request, stripe_signature: str | None = Heade
             user_id, course_slug = _extract_user_and_course(event_obj)
 
             if user_id and course_slug:
-                record_purchase_event(
+                payment_intent_id = None
+                session_id = None
+                if event_type.startswith("checkout.session"):
+                    session_id = stripe_obj_id
+                elif event_type.startswith("charge."):
+                    payment_intent_id = str(event_obj.get("payment_intent") or "") or None
+
+                if apply_purchase_revoke(
+                    user_id,
+                    course_slug,
                     stripe_event_id=event_id,
                     stripe_event_type=event_type,
-                    stripe_session_id=stripe_obj_id,
-                    user_id=user_id,
-                    course_slug=course_slug,
-                )
-                revoke_entitlement(
-                    user_id=user_id,
-                    course_slug=course_slug,
+                    stripe_reference_id=stripe_obj_id,
                     reason=f"stripe:{event_type}",
-                )
-                logger.info("Revoked entitlement via webhook: user=%s course=%s event=%s", user_id, course_slug, event_type)
+                    stripe_session_id=session_id,
+                    stripe_payment_intent_id=payment_intent_id,
+                ):
+                    logger.info(
+                        "Revoked entitlement via webhook: user=%s course=%s event=%s",
+                        user_id,
+                        course_slug,
+                        event_type,
+                    )
             else:
                 logger.warning(
                     "Refund/revoke event missing user/course metadata: event=%s object_id=%s",
@@ -532,6 +538,8 @@ async def billing_checkout(
 
     if req.course_slug:
         form_data["metadata[course_slug]"] = req.course_slug
+    if user_id:
+        form_data["metadata[user_id]"] = user_id
     if user_email:
         form_data["customer_email"] = str(user_email)
 

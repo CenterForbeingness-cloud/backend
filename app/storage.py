@@ -115,9 +115,9 @@ class PostgresChatStore:
         self.dsn = dsn
 
     def _connect(self):
-        import psycopg
+        from app.db import db_connection
 
-        return psycopg.connect(self.dsn, autocommit=True, connect_timeout=5)
+        return db_connection()
 
     def init(self) -> None:
         """Verify the required tables exist. Schema is managed externally via
@@ -247,8 +247,23 @@ class PostgresChatStore:
     def append_message(
         self, session_id: str, role: str, content: str, user_id: str | None = None
     ) -> None:
-        self.ensure_session(session_id, user_id)
         with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO chat_sessions (session_id, user_id, updated_at)
+                VALUES (%s, %s, timezone('utc', now()))
+                ON CONFLICT (session_id)
+                DO UPDATE SET
+                    updated_at = EXCLUDED.updated_at,
+                    user_id = COALESCE(chat_sessions.user_id, EXCLUDED.user_id)
+                RETURNING user_id
+                """,
+                (session_id, user_id),
+            )
+            owner_id = cur.fetchone()[0]
+            if user_id is not None and owner_id is not None and str(owner_id) != user_id:
+                raise SessionAccessError("Session does not belong to the current user")
+
             cur.execute(
                 """
                 INSERT INTO chat_messages (session_id, role, content)
