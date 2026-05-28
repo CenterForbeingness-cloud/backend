@@ -2,6 +2,7 @@ import logging
 import hashlib
 import hmac
 import json
+import re
 import time
 from typing import Optional
 
@@ -17,7 +18,7 @@ from app.chat_service import (
     produce_reply,
     finalize_chat_turn,
 )
-from app.auth import get_current_user
+from app.auth import create_chat_token, get_chat_user, get_current_user
 from app.config import (
     APP_TITLE,
     APP_VERSION,
@@ -38,6 +39,7 @@ from app.models import (
     BillingPaymentIntentResponse,
     ChatRequest,
     ChatResponse,
+    ChatTokenResponse,
     CourseDetailResponse,
     CourseItem,
     CourseListResponse,
@@ -62,6 +64,7 @@ from app.entitlements import (
     apply_purchase_revoke,
     check_entitlement,
     get_user_entitlements,
+    resolve_chat_plan,
 )
 from app.quotas import get_usage_info
 from app.admin_auth import admin_login, verify_totp as verify_admin_totp
@@ -214,6 +217,33 @@ def _extract_user_and_course(event_obj: dict) -> tuple[Optional[str], Optional[s
     return user_id, course_slug
 
 
+# Stripe receipt_email / customer_email require a domain with a TLD (e.g. user@example.com).
+_STRIPE_BILLING_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _email_for_stripe(email: Optional[str]) -> Optional[str]:
+    if not email:
+        return None
+    cleaned = str(email).strip()
+    if not _STRIPE_BILLING_EMAIL_RE.fullmatch(cleaned):
+        return None
+    return cleaned
+
+
+def _raise_for_stripe_error(resp: httpx.Response, *, fallback: str) -> None:
+    if resp.status_code < 400:
+        return
+    detail = fallback
+    try:
+        err = (resp.json().get("error") or {})
+        if isinstance(err, dict) and err.get("message"):
+            detail = str(err["message"])
+    except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
+        pass
+    status = 400 if resp.status_code < 500 else 502
+    raise HTTPException(status_code=status, detail=detail)
+
+
 async def _stripe_request(
     method: str,
     path: str,
@@ -268,7 +298,7 @@ def billing_return_cancel() -> str:
 def chat(
     req: ChatRequest,
     background_tasks: BackgroundTasks,
-    _user: Optional[dict] = Depends(get_current_user),
+    _user: Optional[dict] = Depends(get_chat_user),
 ) -> ChatResponse:
     user_id = _current_user_id(_user)
     result = process_chat_turn(
@@ -292,7 +322,7 @@ def chat(
 def chat_stream(
     req: ChatRequest,
     background_tasks: BackgroundTasks,
-    _user: Optional[dict] = Depends(get_current_user),
+    _user: Optional[dict] = Depends(get_chat_user),
 ) -> StreamingResponse:
     user_id = _current_user_id(_user)
 
@@ -321,6 +351,17 @@ def chat_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/chat/token", response_model=ChatTokenResponse)
+def mint_chat_token(_user: Optional[dict] = Depends(get_current_user)) -> ChatTokenResponse:
+    user_id = _current_user_id(_user)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    plan = resolve_chat_plan(user_id)
+    token, expires_in = create_chat_token(user_id=user_id, plan=plan)
+    return ChatTokenResponse(token=token, expires_in=expires_in)
 
 
 @app.delete("/memory/{session_id}")
@@ -522,7 +563,7 @@ async def billing_checkout(
         )
 
     user_id = _current_user_id(_user)
-    user_email = (_user or {}).get("email")
+    user_email = _email_for_stripe((_user or {}).get("email"))
 
     success_url = _as_url(req.success_url, "https://example.com/checkout/success")
     cancel_url = _as_url(req.cancel_url, "https://example.com/checkout/cancel")
@@ -558,7 +599,7 @@ async def billing_checkout(
 
     if stripe_resp.status_code >= 400:
         logger.error("Stripe checkout error (%s): %s", stripe_resp.status_code, stripe_resp.text)
-        raise HTTPException(status_code=502, detail="Stripe checkout creation failed")
+        _raise_for_stripe_error(stripe_resp, fallback="Stripe checkout creation failed")
 
     payload = stripe_resp.json()
     checkout_url = payload.get("url")
@@ -587,7 +628,13 @@ async def billing_payment_intent(
         )
 
     user_id = _current_user_id(_user)
-    user_email = (_user or {}).get("email")
+    raw_email = (_user or {}).get("email")
+    user_email = _email_for_stripe(raw_email)
+    if raw_email and not user_email:
+        logger.warning(
+            "Skipping receipt_email for payment intent; account email is not Stripe-valid: %s",
+            raw_email,
+        )
 
     try:
         price_resp = await _stripe_request("GET", f"/prices/{req.price_id}")
@@ -597,7 +644,7 @@ async def billing_payment_intent(
 
     if price_resp.status_code >= 400:
         logger.error("Stripe price lookup error (%s): %s", price_resp.status_code, price_resp.text)
-        raise HTTPException(status_code=502, detail="Could not load Stripe price")
+        _raise_for_stripe_error(price_resp, fallback="Could not load Stripe price")
 
     price_payload = price_resp.json()
     unit_amount = price_payload.get("unit_amount")
@@ -634,7 +681,7 @@ async def billing_payment_intent(
 
     if intent_resp.status_code >= 400:
         logger.error("Stripe payment intent error (%s): %s", intent_resp.status_code, intent_resp.text)
-        raise HTTPException(status_code=502, detail="Stripe payment intent creation failed")
+        _raise_for_stripe_error(intent_resp, fallback="Stripe payment intent creation failed")
 
     intent_payload = intent_resp.json()
     payment_intent_id = intent_payload.get("id")
