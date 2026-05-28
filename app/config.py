@@ -24,6 +24,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL") or os.getenv("DATABASE_URL")
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 AUTH_ENFORCED = os.getenv("AUTH_ENFORCED", "false").lower() in {"1", "true", "yes", "on"}
+CHAT_TOKEN_ENFORCED = os.getenv("CHAT_TOKEN_ENFORCED", "false").lower() in {"1", "true", "yes", "on"}
 RAG_ENABLED = os.getenv("RAG_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "3"))
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "")
@@ -31,6 +32,9 @@ PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "sentient-content")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 _raw_cors = os.getenv("CORS_ORIGINS", "")
 CORS_ORIGINS: list[str] = [o.strip() for o in _raw_cors.split(",") if o.strip()]
+_chat_token_secret = (os.getenv("CHAT_TOKEN_SECRET") or "").strip()
+CHAT_TOKEN_SECRET = _chat_token_secret or (SUPABASE_JWT_SECRET or "")
+CHAT_TOKEN_TTL_SECONDS = int(os.getenv("CHAT_TOKEN_TTL_SECONDS", "900"))
 
 # Billing (Stripe)
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY") or os.getenv("STRIPE_API_KEY")

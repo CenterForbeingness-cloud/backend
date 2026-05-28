@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from app.entitlements import apply_purchase_grant, record_purchase_event
+from app.entitlements import apply_purchase_grant, record_purchase_event, resolve_chat_plan
 
 
 def test_record_purchase_event_returns_duplicate_on_unique_violation() -> None:
@@ -44,3 +44,16 @@ def test_apply_purchase_grant_skips_side_effects_on_duplicate_event() -> None:
     mock_event.assert_called_once()
     mock_purchase.assert_not_called()
     mock_grant.assert_not_called()
+
+
+def test_resolve_chat_plan_free_without_entitlements() -> None:
+    with patch("app.entitlements.get_user_entitlements", return_value=[]):
+        assert resolve_chat_plan("user-1") == "free"
+
+
+def test_resolve_chat_plan_premium_with_any_entitlement() -> None:
+    with patch(
+        "app.entitlements.get_user_entitlements",
+        return_value=["mindful-foundations"],
+    ):
+        assert resolve_chat_plan("user-1") == "premium"

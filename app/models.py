@@ -128,6 +128,12 @@ class UsageResponse(BaseModel):
     reset_at: datetime
 
 
+class ChatTokenResponse(BaseModel):
+    token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_in: int
+
+
 class AdminLoginRequest(BaseModel):
     email: str = Field(..., min_length=1)
     password: str = Field(..., min_length=8)

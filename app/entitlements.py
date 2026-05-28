@@ -283,6 +283,15 @@ def get_user_entitlements(user_id: str) -> list[str]:
         return []
 
 
+def resolve_chat_plan(user_id: str) -> str:
+    """
+    Map active entitlements to a chat plan tier for token claims.
+
+    Any active course or bundle purchase counts as premium; otherwise free.
+    """
+    return "premium" if get_user_entitlements(user_id) else "free"
+
+
 def grant_entitlement(
     user_id: str,
     course_slug: str,

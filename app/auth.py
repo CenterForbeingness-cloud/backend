@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import HTTPException, Security, status
@@ -12,8 +13,8 @@ def get_current_user(
     """
     Verify Supabase JWT.
 
-    If SUPABASE_JWT_SECRET is not set the backend runs in dev mode and allows
-    all requests through (returns None). Set the secret in .env to enforce auth.
+    When AUTH_ENFORCED=true, SUPABASE_JWT_SECRET must be configured.
+    In local dev, keep AUTH_ENFORCED=false to allow unauthenticated requests.
     """
     from app.config import AUTH_ENFORCED, SUPABASE_JWT_SECRET, SUPABASE_URL
 
@@ -21,7 +22,10 @@ def get_current_user(
         return None
 
     if not SUPABASE_JWT_SECRET:
-        return None
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Auth is enforced but SUPABASE_JWT_SECRET is not configured",
+        )
 
     if credentials is None:
         raise HTTPException(
@@ -67,5 +71,73 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+
+def create_chat_token(user_id: str, plan: str = "free", session_id: Optional[str] = None) -> tuple[str, int]:
+    from app.config import CHAT_TOKEN_SECRET, CHAT_TOKEN_TTL_SECONDS
+
+    if not CHAT_TOKEN_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Chat token secret is not configured",
+        )
+
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=CHAT_TOKEN_TTL_SECONDS)
+    payload = {
+        "sub": user_id,
+        "scope": "chat",
+        "plan": plan,
+        "session_id": session_id,
+        "iat": int(now.timestamp()),
+        "exp": int(expires_at.timestamp()),
+    }
+
+    import jwt
+
+    token = jwt.encode(payload, CHAT_TOKEN_SECRET, algorithm="HS256")
+    return token, CHAT_TOKEN_TTL_SECONDS
+
+
+def get_chat_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(_security),
+) -> Optional[dict]:
+    from app.config import CHAT_TOKEN_ENFORCED, CHAT_TOKEN_SECRET
+
+    if not CHAT_TOKEN_ENFORCED:
+        return get_current_user(credentials)
+
+    if not CHAT_TOKEN_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Chat token secret is not configured",
+        )
+
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Chat token required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        import jwt
+
+        payload = jwt.decode(
+            credentials.credentials,
+            CHAT_TOKEN_SECRET,
+            algorithms=["HS256"],
+        )
+        if payload.get("scope") != "chat":
+            raise ValueError("Invalid chat token scope")
+        if not payload.get("sub"):
+            raise ValueError("Chat token missing subject")
+        return payload
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired chat token",
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
