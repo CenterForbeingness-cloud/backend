@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import hashlib
 import hmac
@@ -42,6 +43,8 @@ from app.models import (
     AdminTOTPVerifyRequest,
     BillingCheckoutRequest,
     BillingCheckoutResponse,
+    BillingConfirmPaymentRequest,
+    BillingConfirmPaymentResponse,
     BillingPaymentIntentRequest,
     BillingPaymentIntentResponse,
     ChatRequest,
@@ -852,6 +855,73 @@ async def billing_payment_intent(
         client_secret=str(client_secret),
         publishable_key=STRIPE_PUBLISHABLE_KEY,
     )
+
+
+@app.post("/billing/confirm-payment", response_model=BillingConfirmPaymentResponse)
+@BILLING_LIMIT
+async def billing_confirm_payment(
+    request: Request,
+    req: BillingConfirmPaymentRequest,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> BillingConfirmPaymentResponse:
+    """Grant entitlements immediately after in-app PaymentSheet success (webhook backup)."""
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Stripe is not configured")
+
+    user_id = _current_user_id(_user)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    intent_data: dict = {}
+    status = ""
+    for attempt in range(6):
+        try:
+            intent_resp = await _stripe_request("GET", f"/payment_intents/{req.payment_intent_id}")
+        except httpx.HTTPError as exc:
+            logger.exception("Stripe payment intent lookup failed: %s", exc)
+            raise HTTPException(status_code=502, detail="Stripe payment intent lookup failed") from exc
+
+        if intent_resp.status_code >= 400:
+            _raise_for_stripe_error(intent_resp, fallback="Could not load payment intent")
+
+        intent_data = intent_resp.json()
+        status = str(intent_data.get("status") or "").strip()
+        if status == "succeeded":
+            break
+        if status in {"processing", "requires_confirmation", "requires_action"} and attempt < 5:
+            await asyncio.sleep(0.4 + attempt * 0.4)
+            continue
+        break
+
+    if status != "succeeded":
+        raise HTTPException(status_code=400, detail="Payment is not completed yet")
+
+    metadata_user_id, course_slug = _extract_user_and_course(intent_data)
+    if not metadata_user_id or metadata_user_id != user_id:
+        raise HTTPException(status_code=403, detail="Payment does not belong to this account")
+    if not course_slug:
+        raise HTTPException(status_code=400, detail="Payment is missing course metadata")
+
+    payment_intent_id = str(intent_data.get("id") or req.payment_intent_id).strip()
+    if not apply_purchase_grant(
+        user_id,
+        course_slug,
+        stripe_event_id=f"client_confirm:{payment_intent_id}",
+        stripe_event_type="payment_intent.succeeded.client_confirm",
+        stripe_reference_id=payment_intent_id,
+        stripe_payment_intent_id=payment_intent_id,
+    ):
+        raise HTTPException(status_code=500, detail="Could not grant course access")
+
+    owned = get_user_entitlements(user_id)
+    logger.info(
+        "Confirmed in-app payment: user=%s course=%s intent=%s",
+        user_id,
+        course_slug,
+        payment_intent_id,
+    )
+    return BillingConfirmPaymentResponse(course_slug=course_slug, owned_courses=owned)
+
 
 @app.get("/courses", response_model=CourseListResponse)
 def list_courses_endpoint() -> CourseListResponse:

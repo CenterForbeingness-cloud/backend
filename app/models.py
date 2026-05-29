@@ -118,6 +118,15 @@ class BillingPaymentIntentResponse(BaseModel):
     publishable_key: Optional[str] = None
 
 
+class BillingConfirmPaymentRequest(BaseModel):
+    payment_intent_id: str = Field(..., min_length=1)
+
+
+class BillingConfirmPaymentResponse(BaseModel):
+    course_slug: str
+    owned_courses: list[str]
+
+
 class EntitlementResponse(BaseModel):
     owned_courses: list[str]
 
