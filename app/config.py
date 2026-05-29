@@ -41,6 +41,18 @@ STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY") or os.getenv("STRIPE_API_KEY"
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 
+# Per-course Stripe Price IDs (fallback when course_products rows are not seeded yet).
+STRIPE_PRICE_BY_COURSE_SLUG: dict[str, str] = {
+    slug: price_id
+    for slug, env_key in (
+        ("week-zero-reset", "STRIPE_PRICE_WEEK_ZERO_RESET"),
+        ("deep-calm-protocol", "STRIPE_PRICE_DEEP_CALM"),
+        ("focus-discipline", "STRIPE_PRICE_FOCUS_DISCIPLINE"),
+        ("starter-bundle", "STRIPE_PRICE_STARTER_BUNDLE"),
+    )
+    if (price_id := os.getenv(env_key, "").strip())
+}
+
 # Quotas & Rate Limiting
 FAIR_USE_LIMIT = int(os.getenv("FAIR_USE_LIMIT", "100"))  # messages per period
 QUOTA_RESET_PERIOD_HOURS = int(os.getenv("QUOTA_RESET_PERIOD_HOURS", "24"))
