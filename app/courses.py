@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from app.config import SUPABASE_DB_URL, logger
+from app.config import STRIPE_PRICE_BY_COURSE_SLUG, SUPABASE_DB_URL, logger
 
 try:
     from psycopg.errors import UndefinedTable
@@ -70,6 +70,22 @@ def _parse_week_number(dir_name: str) -> Optional[int]:
     if m:
         return int(m.group(1))
     return None
+
+
+def _apply_env_price_fallbacks(courses: list[dict]) -> list[dict]:
+    if not STRIPE_PRICE_BY_COURSE_SLUG:
+        return courses
+
+    results: list[dict] = []
+    for course in courses:
+        updated = dict(course)
+        if not str(updated.get("price_id") or "").strip():
+            slug = str(updated.get("course_slug") or "").strip()
+            env_price_id = STRIPE_PRICE_BY_COURSE_SLUG.get(slug, "")
+            if env_price_id:
+                updated["price_id"] = env_price_id
+        results.append(updated)
+    return results
 
 
 def _list_courses_from_db() -> list[dict]:
@@ -188,7 +204,7 @@ def list_courses() -> list[dict]:
     """Return a list of course summary dicts."""
     if SUPABASE_DB_URL:
         try:
-            return _list_courses_from_db()
+            return _apply_env_price_fallbacks(_list_courses_from_db())
         except Exception as exc:
             _log_db_fallback("list_courses", exc)
 
@@ -217,7 +233,7 @@ def list_courses() -> list[dict]:
                 "currency": None,
             }
         )
-    return results
+    return _apply_env_price_fallbacks(results)
 
 
 def get_course_detail(course_slug: str) -> Optional[dict]:

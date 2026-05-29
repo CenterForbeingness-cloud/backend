@@ -1,6 +1,11 @@
 -- Sentient course ownership and Stripe billing schema (first slice)
 -- Scope: schema, constraints, indexes, and RLS only.
 -- Non-goal: checkout/webhook business logic.
+--
+-- IMPORTANT: If you already ran supabase_entitlements_rls.sql, do NOT run this full file.
+-- It will fail on index creation (column "status" does not exist) because entitlements
+-- uses a different course_purchases / purchase_events schema.
+-- Instead run: supabase_course_catalog_only.sql then seed_courses_example.sql
 
 begin;
 
