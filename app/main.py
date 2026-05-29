@@ -10,6 +10,9 @@ import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response, StreamingResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from app.chat_service import (
     iter_llm_sse,
     iter_scripted_sse,
@@ -20,11 +23,15 @@ from app.chat_service import (
 )
 from app.auth import create_chat_token, get_chat_user, get_current_user
 from app.config import (
+    AUTH_ENFORCED,
     APP_TITLE,
     APP_VERSION,
+    CHAT_TOKEN_ENFORCED,
+    CHAT_TOKEN_SECRET,
     CORS_ORIGINS,
     DEFAULT_PROVIDER,
     FAIR_USE_LIMIT,
+    RATE_LIMIT_ENABLED,
     STRIPE_PUBLISHABLE_KEY,
     STRIPE_SECRET_KEY,
     STRIPE_WEBHOOK_SECRET,
@@ -68,6 +75,7 @@ from app.entitlements import (
 )
 from app.quotas import get_usage_info
 from app.admin_auth import admin_login, verify_totp as verify_admin_totp
+from app.rate_limit import AUTH_LIMIT, BILLING_LIMIT, CHAT_LIMIT, SESSIONS_LIMIT, limiter
 
 logger = logging.getLogger(__name__)
 
@@ -80,12 +88,31 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 chat_store = build_chat_store()
 context_retriever = build_context_retriever()
 
 
 @app.on_event("startup")
 def _startup_db_pool() -> None:
+    if AUTH_ENFORCED and not CHAT_TOKEN_SECRET and CHAT_TOKEN_ENFORCED:
+        raise RuntimeError(
+            "CHAT_TOKEN_ENFORCED=true but no chat token secret is configured"
+        )
+    if AUTH_ENFORCED and not CORS_ORIGINS:
+        logger.warning(
+            "AUTH_ENFORCED=true but CORS_ORIGINS is empty; this allows wildcard CORS"
+        )
+    if AUTH_ENFORCED and not STRIPE_WEBHOOK_SECRET and STRIPE_SECRET_KEY:
+        logger.warning(
+            "STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is missing; "
+            "webhook signature verification is disabled"
+        )
+    if RATE_LIMIT_ENABLED:
+        logger.info("IP rate limiting enabled")
     init_db_pool()
 
 
@@ -217,6 +244,49 @@ def _extract_user_and_course(event_obj: dict) -> tuple[Optional[str], Optional[s
     return user_id, course_slug
 
 
+async def _extract_user_and_course_from_charge(
+    event_obj: dict,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Extract user/course for charge-based webhook events.
+
+    Stripe charge events may not always include metadata directly, so this
+    falls back to retrieving metadata from the related payment_intent.
+    Returns (user_id, course_slug, payment_intent_id).
+    """
+    user_id, course_slug = _extract_user_and_course(event_obj)
+    payment_intent_id = str(event_obj.get("payment_intent") or "").strip() or None
+
+    if user_id and course_slug:
+        return user_id, course_slug, payment_intent_id
+    if not payment_intent_id or not STRIPE_SECRET_KEY:
+        return user_id, course_slug, payment_intent_id
+
+    try:
+        intent_resp = await _stripe_request("GET", f"/payment_intents/{payment_intent_id}")
+        if intent_resp.status_code >= 400:
+            logger.warning(
+                "Could not fetch payment_intent metadata for charge event (status=%s id=%s)",
+                intent_resp.status_code,
+                payment_intent_id,
+            )
+            return user_id, course_slug, payment_intent_id
+        intent_obj = intent_resp.json()
+        fallback_user_id, fallback_course_slug = _extract_user_and_course(intent_obj)
+        return (
+            user_id or fallback_user_id,
+            course_slug or fallback_course_slug,
+            payment_intent_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed payment_intent metadata lookup for charge event id=%s: %s",
+            payment_intent_id,
+            exc,
+        )
+        return user_id, course_slug, payment_intent_id
+
+
 # Stripe receipt_email / customer_email require a domain with a TLD (e.g. user@example.com).
 _STRIPE_BILLING_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -242,6 +312,19 @@ def _raise_for_stripe_error(resp: httpx.Response, *, fallback: str) -> None:
         pass
     status = 400 if resp.status_code < 500 else 502
     raise HTTPException(status_code=status, detail=detail)
+
+
+def _resolve_checkout_course_slug(price_id: str) -> Optional[str]:
+    """
+    Resolve server-side price_id -> course_slug mapping from course catalog.
+    """
+    from app.courses import list_courses
+
+    for course in list_courses():
+        if str(course.get("price_id") or "").strip() == price_id:
+            slug = str(course.get("course_slug") or "").strip()
+            return slug or None
+    return None
 
 
 async def _stripe_request(
@@ -295,7 +378,9 @@ def billing_return_cancel() -> str:
 
 
 @app.post("/chat", response_model=ChatResponse)
+@CHAT_LIMIT
 def chat(
+    request: Request,
     req: ChatRequest,
     background_tasks: BackgroundTasks,
     _user: Optional[dict] = Depends(get_chat_user),
@@ -319,7 +404,9 @@ def chat(
 
 
 @app.post("/chat/stream")
+@CHAT_LIMIT
 def chat_stream(
+    request: Request,
     req: ChatRequest,
     background_tasks: BackgroundTasks,
     _user: Optional[dict] = Depends(get_chat_user),
@@ -354,7 +441,11 @@ def chat_stream(
 
 
 @app.post("/chat/token", response_model=ChatTokenResponse)
-def mint_chat_token(_user: Optional[dict] = Depends(get_current_user)) -> ChatTokenResponse:
+@AUTH_LIMIT
+def mint_chat_token(
+    request: Request,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> ChatTokenResponse:
     user_id = _current_user_id(_user)
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -365,7 +456,12 @@ def mint_chat_token(_user: Optional[dict] = Depends(get_current_user)) -> ChatTo
 
 
 @app.delete("/memory/{session_id}")
-def clear_memory(session_id: str, _user: Optional[dict] = Depends(get_current_user)) -> dict:
+@SESSIONS_LIMIT
+def clear_memory(
+    request: Request,
+    session_id: str,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> dict:
     user_id = _current_user_id(_user)
     try:
         chat_store.clear_session(session_id, user_id)
@@ -376,7 +472,12 @@ def clear_memory(session_id: str, _user: Optional[dict] = Depends(get_current_us
 
 
 @app.post("/sessions", response_model=SessionResponse)
-def create_session(req: CreateSessionRequest, _user: Optional[dict] = Depends(get_current_user)) -> SessionResponse:
+@SESSIONS_LIMIT
+def create_session(
+    request: Request,
+    req: CreateSessionRequest,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> SessionResponse:
     session_id = req.session_id or generate_session_id()
     user_id = _current_user_id(_user)
     try:
@@ -387,7 +488,12 @@ def create_session(req: CreateSessionRequest, _user: Optional[dict] = Depends(ge
 
 
 @app.get("/sessions", response_model=SessionListResponse)
-def list_sessions(limit: int = 50, _user: Optional[dict] = Depends(get_current_user)) -> SessionListResponse:
+@SESSIONS_LIMIT
+def list_sessions(
+    request: Request,
+    limit: int = 50,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> SessionListResponse:
     safe_limit = max(1, min(limit, 200))
     user_id = _current_user_id(_user)
     try:
@@ -398,7 +504,13 @@ def list_sessions(limit: int = 50, _user: Optional[dict] = Depends(get_current_u
 
 
 @app.get("/sessions/{session_id}/messages", response_model=SessionMessagesResponse)
-def get_session_messages(session_id: str, limit: int = 50, _user: Optional[dict] = Depends(get_current_user)) -> SessionMessagesResponse:
+@SESSIONS_LIMIT
+def get_session_messages(
+    request: Request,
+    session_id: str,
+    limit: int = 50,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> SessionMessagesResponse:
     safe_limit = max(1, min(limit, 200))
     user_id = _current_user_id(_user)
     try:
@@ -412,11 +524,15 @@ def get_session_messages(session_id: str, limit: int = 50, _user: Optional[dict]
 async def billing_webhook(request: Request, stripe_signature: str | None = Header(default=None, alias="Stripe-Signature")) -> dict:
     payload = await request.body()
 
-    if STRIPE_WEBHOOK_SECRET:
-        if not stripe_signature:
-            raise HTTPException(status_code=400, detail="Missing Stripe-Signature header")
-        if not _verify_stripe_signature(payload, stripe_signature, STRIPE_WEBHOOK_SECRET):
-            raise HTTPException(status_code=400, detail="Invalid Stripe signature")
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(
+            status_code=503,
+            detail="Stripe webhook secret is not configured",
+        )
+    if not stripe_signature:
+        raise HTTPException(status_code=400, detail="Missing Stripe-Signature header")
+    if not _verify_stripe_signature(payload, stripe_signature, STRIPE_WEBHOOK_SECRET):
+        raise HTTPException(status_code=400, detail="Invalid Stripe signature")
 
     try:
         event = json.loads(payload.decode("utf-8"))
@@ -426,6 +542,7 @@ async def billing_webhook(request: Request, stripe_signature: str | None = Heade
     event_type = str(event.get("type", "unknown"))
     event_id = str(event.get("id", "unknown"))
     logger.info("Stripe webhook received: id=%s type=%s", event_id, event_type)
+    processing_errors: list[str] = []
 
     # Process purchase grant events.
     if event_type == "checkout.session.completed":
@@ -458,6 +575,7 @@ async def billing_webhook(request: Request, stripe_signature: str | None = Heade
                 logger.warning("Incomplete checkout data: session=%s user=%s course=%s", session_id, user_id, course_slug)
         except Exception as exc:
             logger.exception("Failed to process checkout.session.completed: %s", exc)
+            processing_errors.append("checkout.session.completed")
 
     if event_type == "payment_intent.succeeded":
         try:
@@ -494,6 +612,7 @@ async def billing_webhook(request: Request, stripe_signature: str | None = Heade
                 )
         except Exception as exc:
             logger.exception("Failed to process payment_intent.succeeded: %s", exc)
+            processing_errors.append("payment_intent.succeeded")
 
     # Process purchase revoke/refund events.
     # These handlers require user/course metadata on the Stripe object.
@@ -507,15 +626,15 @@ async def billing_webhook(request: Request, stripe_signature: str | None = Heade
             event_obj = event.get("data", {}).get("object", {})
             stripe_obj_id = str(event_obj.get("id", "unknown"))
             user_id, course_slug = _extract_user_and_course(event_obj)
+            payment_intent_id = None
+            session_id = None
+
+            if event_type.startswith("checkout.session"):
+                session_id = stripe_obj_id
+            elif event_type.startswith("charge."):
+                user_id, course_slug, payment_intent_id = await _extract_user_and_course_from_charge(event_obj)
 
             if user_id and course_slug:
-                payment_intent_id = None
-                session_id = None
-                if event_type.startswith("checkout.session"):
-                    session_id = stripe_obj_id
-                elif event_type.startswith("charge."):
-                    payment_intent_id = str(event_obj.get("payment_intent") or "") or None
-
                 if apply_purchase_revoke(
                     user_id,
                     course_slug,
@@ -540,6 +659,13 @@ async def billing_webhook(request: Request, stripe_signature: str | None = Heade
                 )
         except Exception as exc:
             logger.exception("Failed to process %s: %s", event_type, exc)
+            processing_errors.append(event_type)
+
+    if processing_errors:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process webhook event(s): {', '.join(sorted(set(processing_errors)))}",
+        )
 
     return {
         "ok": True,
@@ -550,7 +676,9 @@ async def billing_webhook(request: Request, stripe_signature: str | None = Heade
 
 
 @app.post("/billing/checkout", response_model=BillingCheckoutResponse)
+@BILLING_LIMIT
 async def billing_checkout(
+    request: Request,
     req: BillingCheckoutRequest,
     _user: Optional[dict] = Depends(get_current_user),
 ) -> BillingCheckoutResponse:
@@ -568,6 +696,20 @@ async def billing_checkout(
     success_url = _as_url(req.success_url, "https://example.com/checkout/success")
     cancel_url = _as_url(req.cancel_url, "https://example.com/checkout/cancel")
 
+    resolved_course_slug = _resolve_checkout_course_slug(req.price_id)
+    if req.course_slug and resolved_course_slug and req.course_slug != resolved_course_slug:
+        raise HTTPException(
+            status_code=400,
+            detail="price_id does not match requested course_slug",
+        )
+    if req.course_slug and not resolved_course_slug:
+        raise HTTPException(
+            status_code=400,
+            detail="price_id is not mapped to a server-side course",
+        )
+
+    metadata_course_slug = resolved_course_slug or req.course_slug
+
     form_data: dict[str, str] = {
         "mode": "payment",
         "success_url": success_url,
@@ -577,8 +719,8 @@ async def billing_checkout(
         "client_reference_id": user_id or "anonymous",
     }
 
-    if req.course_slug:
-        form_data["metadata[course_slug]"] = req.course_slug
+    if metadata_course_slug:
+        form_data["metadata[course_slug]"] = metadata_course_slug
     if user_id:
         form_data["metadata[user_id]"] = user_id
     if user_email:
@@ -615,7 +757,9 @@ async def billing_checkout(
 
 
 @app.post("/billing/payment-intent", response_model=BillingPaymentIntentResponse)
+@BILLING_LIMIT
 async def billing_payment_intent(
+    request: Request,
     req: BillingPaymentIntentRequest,
     _user: Optional[dict] = Depends(get_current_user),
 ) -> BillingPaymentIntentResponse:
@@ -654,10 +798,23 @@ async def billing_payment_intent(
     if not active or not isinstance(unit_amount, int) or unit_amount <= 0:
         raise HTTPException(status_code=400, detail="Selected Stripe price is invalid or inactive")
 
+    resolved_course_slug = _resolve_checkout_course_slug(req.price_id)
+    if req.course_slug and resolved_course_slug and req.course_slug != resolved_course_slug:
+        raise HTTPException(
+            status_code=400,
+            detail="price_id does not match requested course_slug",
+        )
+    if req.course_slug and not resolved_course_slug:
+        raise HTTPException(
+            status_code=400,
+            detail="price_id is not mapped to a server-side course",
+        )
+
     amount = unit_amount * req.quantity
     metadata: dict[str, str] = {}
-    if req.course_slug:
-        metadata["course_slug"] = req.course_slug
+    metadata_course_slug = resolved_course_slug or req.course_slug
+    if metadata_course_slug:
+        metadata["course_slug"] = metadata_course_slug
     if user_id:
         metadata["user_id"] = user_id
 
@@ -695,7 +852,6 @@ async def billing_payment_intent(
         client_secret=str(client_secret),
         publishable_key=STRIPE_PUBLISHABLE_KEY,
     )
-
 
 @app.get("/courses", response_model=CourseListResponse)
 def list_courses_endpoint() -> CourseListResponse:
@@ -814,7 +970,8 @@ def get_usage(_user: Optional[dict] = Depends(get_current_user)) -> UsageRespons
 
 
 @app.post("/admin/auth/login", response_model=dict)
-def admin_login_endpoint(req: AdminLoginRequest) -> dict:
+@AUTH_LIMIT
+def admin_login_endpoint(request: Request, req: AdminLoginRequest) -> dict:
     """
     Admin login endpoint. Returns session_token for 2FA verification.
     
@@ -833,7 +990,8 @@ def admin_login_endpoint(req: AdminLoginRequest) -> dict:
 
 
 @app.post("/admin/auth/verify-totp", response_model=AdminTokenResponse)
-def admin_verify_totp_endpoint(req: AdminTOTPVerifyRequest) -> AdminTokenResponse:
+@AUTH_LIMIT
+def admin_verify_totp_endpoint(request: Request, req: AdminTOTPVerifyRequest) -> AdminTokenResponse:
     """
     Verify TOTP code and return admin JWT token.
     
