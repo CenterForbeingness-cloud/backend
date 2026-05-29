@@ -44,6 +44,16 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 # Quotas & Rate Limiting
 FAIR_USE_LIMIT = int(os.getenv("FAIR_USE_LIMIT", "100"))  # messages per period
 QUOTA_RESET_PERIOD_HOURS = int(os.getenv("QUOTA_RESET_PERIOD_HOURS", "24"))
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+RATE_LIMIT_CHAT = os.getenv("RATE_LIMIT_CHAT", "30/minute")
+RATE_LIMIT_SESSIONS = os.getenv("RATE_LIMIT_SESSIONS", "60/minute")
+RATE_LIMIT_AUTH = os.getenv("RATE_LIMIT_AUTH", "10/minute")
+RATE_LIMIT_BILLING = os.getenv("RATE_LIMIT_BILLING", "15/minute")
 
 # Admin & 2FA
 ADMIN_2FA_ISSUER = os.getenv("ADMIN_2FA_ISSUER", "Sentient")
