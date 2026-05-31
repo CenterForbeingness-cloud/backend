@@ -2,7 +2,12 @@
 
 from unittest.mock import MagicMock, patch
 
-from app.entitlements import apply_purchase_grant, record_purchase_event, resolve_chat_plan
+from app.entitlements import (
+    apply_purchase_grant,
+    evaluate_bundle_purchase_eligibility,
+    record_purchase_event,
+    resolve_chat_plan,
+)
 
 
 def test_record_purchase_event_returns_duplicate_on_unique_violation() -> None:
@@ -57,3 +62,45 @@ def test_resolve_chat_plan_premium_with_any_entitlement() -> None:
         return_value=["mindful-foundations"],
     ):
         assert resolve_chat_plan("user-1") == "premium"
+
+
+def test_bundle_eligible_when_no_overlap() -> None:
+    with patch("app.entitlements.get_user_entitlements", return_value=[]):
+        result = evaluate_bundle_purchase_eligibility("user-1", "starter-bundle")
+    assert result["eligible"] is True
+    assert "mindful-foundations" in result["included_course_slugs"]
+
+
+def test_bundle_blocked_when_owning_included_course() -> None:
+    with patch(
+        "app.entitlements.get_user_entitlements",
+        return_value=["week-zero-reset"],
+    ):
+        result = evaluate_bundle_purchase_eligibility("user-1", "starter-bundle")
+    assert result["eligible"] is False
+    assert result["owned_included_slugs"] == ["week-zero-reset"]
+
+
+def test_bundle_blocked_when_already_own_bundle_sku() -> None:
+    with patch(
+        "app.entitlements.get_user_entitlements",
+        return_value=["starter-bundle"],
+    ):
+        result = evaluate_bundle_purchase_eligibility("user-1", "starter-bundle")
+    assert result["eligible"] is False
+
+
+def test_apply_purchase_grant_refuses_ineligible_bundle() -> None:
+    with patch(
+        "app.entitlements.evaluate_bundle_purchase_eligibility",
+        return_value={"eligible": False, "owned_included_slugs": ["deep-calm-protocol"]},
+    ), patch("app.entitlements.record_purchase_event") as mock_event:
+        ok = apply_purchase_grant(
+            "user-1",
+            "starter-bundle",
+            stripe_event_id="evt_bundle",
+            stripe_event_type="payment_intent.succeeded",
+            stripe_reference_id="pi_bundle",
+        )
+    assert ok is False
+    mock_event.assert_not_called()

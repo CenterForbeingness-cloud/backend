@@ -71,6 +71,15 @@ class CourseItem(BaseModel):
     price_id: Optional[str] = None
     unit_amount_cents: Optional[int] = None
     currency: Optional[str] = None
+    bundle_included_slugs: Optional[list[str]] = None
+
+
+class BundlePurchaseEligibility(BaseModel):
+    bundle_slug: str
+    eligible: bool
+    included_course_slugs: list[str]
+    owned_included_slugs: list[str]
+    message: Optional[str] = None
 
 
 class CourseListResponse(BaseModel):
@@ -129,6 +138,7 @@ class BillingConfirmPaymentResponse(BaseModel):
 
 class EntitlementResponse(BaseModel):
     owned_courses: list[str]
+    bundle_eligibility: list[BundlePurchaseEligibility] = Field(default_factory=list)
 
 
 class UsageResponse(BaseModel):

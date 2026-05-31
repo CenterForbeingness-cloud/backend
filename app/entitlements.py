@@ -30,6 +30,81 @@ def is_product_only_slug(course_slug: str) -> bool:
     return course_slug in PRODUCT_ONLY_SLUGS
 
 
+def bundle_included_slugs(bundle_slug: str) -> tuple[str, ...]:
+    """Course slugs granted when a bundle product SKU is purchased."""
+    return BUNDLE_INCLUDED_COURSES.get(bundle_slug, ())
+
+
+def evaluate_bundle_purchase_eligibility(
+    user_id: Optional[str],
+    bundle_slug: str,
+) -> dict:
+    """
+    Determine whether a user may purchase a bundle SKU.
+
+    Rule: bundle purchase is blocked if the user already owns the bundle SKU or
+    any course included in that bundle (prevents double-paying for overlap).
+    """
+    included = bundle_included_slugs(bundle_slug)
+    if not included:
+        return {
+            "bundle_slug": bundle_slug,
+            "eligible": False,
+            "included_course_slugs": [],
+            "owned_included_slugs": [],
+            "message": "Unknown bundle product.",
+        }
+
+    if not user_id:
+        return {
+            "bundle_slug": bundle_slug,
+            "eligible": False,
+            "included_course_slugs": list(included),
+            "owned_included_slugs": [],
+            "message": "Sign in to purchase a bundle.",
+        }
+
+    owned = set(get_user_entitlements(user_id))
+    if bundle_slug in owned:
+        return {
+            "bundle_slug": bundle_slug,
+            "eligible": False,
+            "included_course_slugs": list(included),
+            "owned_included_slugs": [],
+            "message": "You already own this bundle.",
+        }
+
+    owned_included = [slug for slug in included if slug in owned]
+    if owned_included:
+        return {
+            "bundle_slug": bundle_slug,
+            "eligible": False,
+            "included_course_slugs": list(included),
+            "owned_included_slugs": owned_included,
+            "message": (
+                "This bundle is not available because you already own one or more "
+                "courses it includes. Unlock any remaining courses individually."
+            ),
+        }
+
+    return {
+        "bundle_slug": bundle_slug,
+        "eligible": True,
+        "included_course_slugs": list(included),
+        "owned_included_slugs": [],
+        "message": None,
+    }
+
+
+def assert_bundle_purchase_allowed(user_id: Optional[str], course_slug: str) -> None:
+    """Raise ValueError with a user-safe message when bundle purchase is not allowed."""
+    if course_slug not in BUNDLE_INCLUDED_COURSES:
+        return
+    result = evaluate_bundle_purchase_eligibility(user_id, course_slug)
+    if not result["eligible"]:
+        raise ValueError(result["message"] or "Bundle purchase not allowed.")
+
+
 def entitlement_grants_for_product(course_slug: str) -> list[str]:
     """Slugs to grant for a purchase (bundle expands to included courses)."""
     grants = [course_slug]
@@ -573,6 +648,17 @@ def apply_purchase_grant(
     """
     Idempotent grant path: record webhook event once, then purchase row + entitlement.
     """
+    if course_slug in BUNDLE_INCLUDED_COURSES:
+        eligibility = evaluate_bundle_purchase_eligibility(user_id, course_slug)
+        if not eligibility["eligible"]:
+            logger.warning(
+                "Refused bundle entitlement grant: user=%s bundle=%s owned_included=%s",
+                user_id,
+                course_slug,
+                eligibility.get("owned_included_slugs"),
+            )
+            return False
+
     event_status = record_purchase_event(
         stripe_event_id=stripe_event_id,
         stripe_event_type=stripe_event_type,

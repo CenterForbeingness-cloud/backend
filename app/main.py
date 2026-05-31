@@ -55,6 +55,7 @@ from app.models import (
     CourseListResponse,
     CourseProgressResponse,
     CreateSessionRequest,
+    BundlePurchaseEligibility,
     EntitlementResponse,
     LessonItem,
     SessionListResponse,
@@ -70,9 +71,13 @@ from app.rag import build_context_retriever
 from app.lesson_state import reset_lesson_state
 from app.storage import SessionAccessError, build_chat_store
 from app.entitlements import (
+    BUNDLE_INCLUDED_COURSES,
     apply_purchase_grant,
     apply_purchase_revoke,
+    assert_bundle_purchase_allowed,
+    bundle_included_slugs,
     check_entitlement,
+    evaluate_bundle_purchase_eligibility,
     get_user_entitlements,
     resolve_chat_plan,
 )
@@ -713,6 +718,12 @@ async def billing_checkout(
 
     metadata_course_slug = resolved_course_slug or req.course_slug
 
+    if metadata_course_slug:
+        try:
+            assert_bundle_purchase_allowed(user_id, metadata_course_slug)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     form_data: dict[str, str] = {
         "mode": "payment",
         "success_url": success_url,
@@ -817,6 +828,10 @@ async def billing_payment_intent(
     metadata: dict[str, str] = {}
     metadata_course_slug = resolved_course_slug or req.course_slug
     if metadata_course_slug:
+        try:
+            assert_bundle_purchase_allowed(user_id, metadata_course_slug)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         metadata["course_slug"] = metadata_course_slug
     if user_id:
         metadata["user_id"] = user_id
@@ -923,12 +938,21 @@ async def billing_confirm_payment(
     return BillingConfirmPaymentResponse(course_slug=course_slug, owned_courses=owned)
 
 
+def _course_item_from_dict(course: dict) -> CourseItem:
+    slug = str(course.get("course_slug") or "").strip()
+    included = list(bundle_included_slugs(slug)) if slug in BUNDLE_INCLUDED_COURSES else None
+    payload = dict(course)
+    if included:
+        payload["bundle_included_slugs"] = included
+    return CourseItem(**payload)
+
+
 @app.get("/courses", response_model=CourseListResponse)
 def list_courses_endpoint() -> CourseListResponse:
     from app.courses import list_courses
 
     return CourseListResponse(
-        courses=[CourseItem(**c) for c in list_courses()]
+        courses=[_course_item_from_dict(c) for c in list_courses()]
     )
 
 
@@ -1021,7 +1045,14 @@ def get_entitlements(_user: Optional[dict] = Depends(get_current_user)) -> Entit
         raise HTTPException(status_code=401, detail="Authentication required")
 
     owned_courses = get_user_entitlements(user_id)
-    return EntitlementResponse(owned_courses=owned_courses)
+    bundle_eligibility = [
+        BundlePurchaseEligibility(**evaluate_bundle_purchase_eligibility(user_id, slug))
+        for slug in BUNDLE_INCLUDED_COURSES
+    ]
+    return EntitlementResponse(
+        owned_courses=owned_courses,
+        bundle_eligibility=bundle_eligibility,
+    )
 
 
 @app.get("/usage", response_model=UsageResponse)
