@@ -33,10 +33,13 @@ def generate_reply(
     *,
     base_script: Optional[str] = None,
     schedule_system_block: Optional[str] = None,
+    profile_system_block: Optional[str] = None,
 ) -> str:
     system_prompt = (
         "You are a calm meditation assistant. Keep responses concise, safe, and on-brand."
     )
+    if profile_system_block:
+        system_prompt = f"{system_prompt}\n\n{profile_system_block}"
     # Daily lessons ship a full script block; skip the long base script to cut tokens and latency.
     if base_script and not schedule_system_block:
         system_prompt = f"{system_prompt}\n\n[Grounded Base Script]\n{base_script}"
@@ -97,11 +100,14 @@ def generate_reply_stream(
     *,
     base_script: Optional[str] = None,
     schedule_system_block: Optional[str] = None,
+    profile_system_block: Optional[str] = None,
 ):
     """Yield text deltas from the LLM (OpenAI streaming; Claude falls back to one chunk)."""
     system_prompt = (
         "You are a calm meditation assistant. Keep responses concise, safe, and on-brand."
     )
+    if profile_system_block:
+        system_prompt = f"{system_prompt}\n\n{profile_system_block}"
     if base_script and not schedule_system_block:
         system_prompt = f"{system_prompt}\n\n[Grounded Base Script]\n{base_script}"
     if schedule_system_block:
@@ -147,5 +153,6 @@ def generate_reply_stream(
         retrieved_context,
         base_script=base_script,
         schedule_system_block=schedule_system_block,
+        profile_system_block=profile_system_block,
     )
     yield text

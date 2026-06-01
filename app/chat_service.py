@@ -28,6 +28,7 @@ from app.models import ChatRequest
 from app.quotas import check_quota, increment_message_count
 from app.rag import load_base_script
 from app.storage import SessionAccessError
+from app.user_profile import load_profile_prompt_block
 
 _BASE_SCRIPT = load_base_script()
 
@@ -202,6 +203,8 @@ def produce_reply(
             )
         )
 
+    profile_block = load_profile_prompt_block(ctx.user_id)
+
     try:
         reply = generate_reply(
             ctx.req.message,
@@ -210,6 +213,7 @@ def produce_reply(
             retrieved_context,
             base_script=_BASE_SCRIPT,
             schedule_system_block=ctx.schedule_system_block,
+            profile_system_block=profile_block,
         )
     except Exception as exc:
         logger.exception("generate_reply failed: %s", exc)
@@ -307,6 +311,8 @@ def iter_llm_sse(
             )
         )
 
+    profile_block = load_profile_prompt_block(ctx.user_id)
+
     parts: List[str] = []
     try:
         for token in generate_reply_stream(
@@ -316,6 +322,7 @@ def iter_llm_sse(
             retrieved_context,
             base_script=_BASE_SCRIPT,
             schedule_system_block=ctx.schedule_system_block,
+            profile_system_block=profile_block,
         ):
             parts.append(token)
             payload = json.dumps({"type": "token", "content": token})
