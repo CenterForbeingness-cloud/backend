@@ -58,6 +58,8 @@ Companion-first product direction:
 - `POST /courses/{course_slug}/progress/advance`
 - `GET /entitlements`
 - `GET /usage`
+- `GET /profile` — thin companion memory (Phase 1)
+- `PATCH /profile` — update goals / focus
 
 `POST /sessions` accepts an optional `session_id` and returns the active session id.
 `GET /sessions/{session_id}/messages` returns recent messages for that session.

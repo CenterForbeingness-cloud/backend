@@ -147,6 +147,28 @@ class UsageResponse(BaseModel):
     reset_at: datetime
 
 
+class UserProfileResponse(BaseModel):
+    user_id: str
+    display_name: Optional[str] = None
+    primary_goal: Optional[str] = None
+    secondary_goal: Optional[str] = None
+    current_focus: Optional[str] = None
+    energy_level: Optional[str] = None
+    motivation_type: Optional[str] = None
+    has_launch_memory: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class UserProfileUpdateRequest(BaseModel):
+    display_name: Optional[str] = Field(default=None, max_length=120)
+    primary_goal: Optional[str] = Field(default=None, max_length=500)
+    secondary_goal: Optional[str] = Field(default=None, max_length=500)
+    current_focus: Optional[str] = Field(default=None, max_length=500)
+    energy_level: Optional[str] = Field(default=None, max_length=80)
+    motivation_type: Optional[str] = Field(default=None, max_length=80)
+
+
 class ChatTokenResponse(BaseModel):
     token: str
     token_type: Literal["bearer"] = "bearer"

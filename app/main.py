@@ -62,6 +62,8 @@ from app.models import (
     SessionMessagesResponse,
     SessionResponse,
     UsageResponse,
+    UserProfileResponse,
+    UserProfileUpdateRequest,
     WeekItem,
     generate_session_id,
 )
@@ -82,6 +84,11 @@ from app.entitlements import (
     resolve_chat_plan,
 )
 from app.quotas import get_usage_info
+from app.user_profile import (
+    get_user_profile,
+    profile_has_launch_memory,
+    upsert_user_profile,
+)
 from app.admin_auth import admin_login, verify_totp as verify_admin_totp
 from app.rate_limit import AUTH_LIMIT, BILLING_LIMIT, CHAT_LIMIT, SESSIONS_LIMIT, limiter
 
@@ -92,7 +99,7 @@ app = FastAPI(title=APP_TITLE, version=APP_VERSION)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS if CORS_ORIGINS else ["*"],
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -165,6 +172,24 @@ def _current_user_id(user: Optional[dict]) -> str | None:
     if user is None:
         return None
     return user.get("sub")
+
+
+def _profile_response(user_id: str) -> UserProfileResponse:
+    profile = get_user_profile(user_id)
+    if profile is None:
+        return UserProfileResponse(user_id=user_id, has_launch_memory=False)
+    return UserProfileResponse(
+        user_id=profile.user_id,
+        display_name=profile.display_name,
+        primary_goal=profile.primary_goal,
+        secondary_goal=profile.secondary_goal,
+        current_focus=profile.current_focus,
+        energy_level=profile.energy_level,
+        motivation_type=profile.motivation_type,
+        has_launch_memory=profile_has_launch_memory(profile),
+        created_at=profile.created_at,
+        updated_at=profile.updated_at,
+    )
 
 
 def _as_url(value: Optional[str], fallback: str) -> str:
@@ -1053,6 +1078,41 @@ def get_entitlements(_user: Optional[dict] = Depends(get_current_user)) -> Entit
         owned_courses=owned_courses,
         bundle_eligibility=bundle_eligibility,
     )
+
+
+@app.get("/profile", response_model=UserProfileResponse)
+def get_profile(_user: Optional[dict] = Depends(get_current_user)) -> UserProfileResponse:
+    """Return the authenticated user's companion profile (thin memory)."""
+    user_id = _current_user_id(_user)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return _profile_response(user_id)
+
+
+@app.patch("/profile", response_model=UserProfileResponse)
+def update_profile(
+    body: UserProfileUpdateRequest,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> UserProfileResponse:
+    """Create or update companion profile fields."""
+    user_id = _current_user_id(_user)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        return _profile_response(user_id)
+
+    try:
+        upsert_user_profile(user_id, fields)
+    except RuntimeError as exc:
+        logger.error("Profile update failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Profile storage unavailable. Run sql/supabase_user_profile.sql.",
+        ) from exc
+
+    return _profile_response(user_id)
 
 
 @app.get("/usage", response_model=UsageResponse)
