@@ -1,6 +1,19 @@
 ﻿# Sentient Backend
 
-FastAPI backend for the AI chat companion, adaptive memory, progress tracking, and support content.
+FastAPI backend for the AI chat companion, billing, course context (RAG), and sessions.
+
+**Status (May 2026):** See [`BACKEND_8_10_SUMMARY.md`](../BACKEND_8_10_SUMMARY.md) for the honest split:
+
+| | Score |
+|---|-------|
+| Infrastructure (auth, chat, Stripe, entitlements, RAG, deploy) | **~9/10** |
+| Product moat (profile, memory injection, facts, goals, check-ins) | **~2/10** |
+
+**Build order:** [`MVP_NORTH_STAR.md`](../MVP_NORTH_STAR.md) — next backend work is **`user_profile` + inject into `/chat` prompts**, not admin UI or voice.
+
+**Launch gates:** [`SECURITY_AND_REMAINING_WORK.md`](../SECURITY_AND_REMAINING_WORK.md)
+
+---
 
 ## Current Backend Layout
 
@@ -23,10 +36,10 @@ For deploying from this monorepo, splitting into a second Git repo, and staging 
 
 Companion-first product direction:
 
-- `/chat` is the main user-facing interface.
-- Memory, goals, habits, preferences, and check-ins should be treated as first-class backend concepts.
-- Courses remain supported as structured learning content, but they are secondary to the companion experience.
-- Notifications, summaries, reminders, and recommendation logic should grow around the user profile rather than around a course catalog.
+- `/chat` is the main user-facing interface (not “open course first”).
+- **Not implemented yet:** `user_profile`, memory injection, `user_facts`, `user_goals`, `memory_events`, `checkins` — see `MVP_NORTH_STAR.md`.
+- Courses are **context for the AI** (RAG + entitlements), not the product shell.
+- Infrastructure (billing, webhooks, quotas, admin login API) is largely done; differentiation is memory.
 
 ## Endpoints
 
@@ -261,20 +274,32 @@ Stripe CLI and webhook testing guide:
 
 - `backend/STRIPE_PAYMENTS.md`
 
-## Next Backend Flow
+## Next backend work (priority order)
 
-Course purchase and entitlement gating are implemented (`app/entitlements.py`, billing routes in `app/main.py`, gating in `app/chat_service.py`).
+### Phase 1 — highest ROI (moat)
 
-Next milestones:
+1. **`user_profile`** — SQL migration + RLS + `GET`/`PATCH /profile`
+2. **Prompt injection** — load profile in `chat_service.py`; add `USER PROFILE` block to system prompt (`primary_goal`, `current_focus`, `biggest_obstacle`, `motivation_type`)
+3. **Onboarding or first-chat capture** — write profile row (manual fields OK; no extraction engine required for v1)
 
-1. **Companion memory and check-ins** — `app/memory.py`, check-in endpoints, recommendations (see `ROADMAP.md`).
-2. **Production billing** — live Stripe keys, public webhook URL, monitoring on failed webhooks.
-3. **DB course catalog** — run `supabase_courses_billing_rls.sql` when ready to move off filesystem + per-env price fallbacks.
+### Phase 1 — launch hardening (parallel)
 
-Protected chat sequence (already enforced):
+- Prod env: `AUTH_ENFORCED`, `CHAT_TOKEN_ENFORCED`, `RATE_LIMIT_ENABLED`, live Stripe webhook, CORS, Supabase redirects (`SECURITY_AND_REMAINING_WORK.md`)
+
+### Phase 2 — memory+
+
+- `user_facts`, `user_goals`, `memory_events`, extraction pipeline (`MVP_NORTH_STAR.md`)
+
+### Deferred
+
+- Admin grant/revoke routes + UI → Phase 5 (`docs/ADMIN_V1_SPEC.md`); use Supabase for entitlements today
+- Voice, advanced RAG, full DB course catalog (optional)
+
+### Protected chat sequence (today)
 
 1. Validate JWT → `user_id`
 2. Fair-use quota check
 3. Entitlement check when `course_slug` is set
-4. Build context (schedule day, RAG, history) → generate reply
+4. Build context (schedule day, RAG, **short history** — not structured memory yet)
+5. Generate reply
 
