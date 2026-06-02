@@ -12,6 +12,39 @@ class ChatRequest(BaseModel):
     course_slug: Optional[str] = None
     week_number: Optional[int] = None
     day_number: Optional[int] = Field(default=None, ge=1)
+    mode: Literal["text", "voice"] = "text"
+
+
+class RetrievalHitResponse(BaseModel):
+    id: str
+    score: float
+    course_slug: Optional[str] = None
+    source_type: str = "text"
+    lesson: Optional[str] = None
+    week_number: Optional[int] = None
+
+
+class ChatVoiceResponse(BaseModel):
+    session_id: str
+    reply: str
+    transcript_user: str
+    audio_base64: str
+    audio_mime: str = "audio/mpeg"
+    provider_used: str
+    memory_size: int
+    day_number: Optional[int] = None
+    spoken_seconds: float
+    rag_hit: bool
+    retrievals: list[RetrievalHitResponse] = Field(default_factory=list)
+
+
+class AnalyticsEventItem(BaseModel):
+    event_name: str = Field(..., min_length=1, max_length=120)
+    properties: dict = Field(default_factory=dict)
+
+
+class AnalyticsEventsRequest(BaseModel):
+    events: list[AnalyticsEventItem] = Field(..., min_length=1, max_length=20)
 
 
 class ChatResponse(BaseModel):

@@ -70,3 +70,13 @@ RATE_LIMIT_BILLING = os.getenv("RATE_LIMIT_BILLING", "15/minute")
 # Admin & 2FA
 ADMIN_2FA_ISSUER = os.getenv("ADMIN_2FA_ISSUER", "Sentient")
 ADMIN_2FA_WINDOW = int(os.getenv("ADMIN_2FA_WINDOW", "1"))  # TOTP time window tolerance
+
+# Voice (MVP Launch) — POST /chat/voice
+VOICE_ENABLED = os.getenv("VOICE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+VOICE_MAX_RECORDING_SEC = int(os.getenv("VOICE_MAX_RECORDING_SEC", "90"))
+VOICE_DAILY_SECONDS_CAP = int(os.getenv("VOICE_DAILY_SECONDS_CAP", "600"))
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "whisper-1")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID_DEFAULT = os.getenv("ELEVENLABS_VOICE_ID_DEFAULT", "")
+ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")

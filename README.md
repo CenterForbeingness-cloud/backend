@@ -9,9 +9,11 @@ FastAPI backend for the AI chat companion, billing, course context (RAG), and se
 | Infrastructure (auth, chat, Stripe, entitlements, RAG, deploy) | **~9/10** |
 | Product moat (profile, memory injection, facts, goals, check-ins) | **~2/10** |
 
-**Build order:** [`MVP_NORTH_STAR.md`](../MVP_NORTH_STAR.md) — next backend work is **`user_profile` + inject into `/chat` prompts**, not admin UI or voice.
+**Build order:** [`MVP_NORTH_STAR.md`](../MVP_NORTH_STAR.md) · [`docs/MVP_LAUNCH_SCOPE.md`](../docs/MVP_LAUNCH_SCOPE.md)
 
-**Launch gates:** [`SECURITY_AND_REMAINING_WORK.md`](../SECURITY_AND_REMAINING_WORK.md)
+**MVP Launch backend:** Track B `user_profile` + Track C **voice+RAG** (same `/chat` path) + Track D **analytics** — not admin UI.
+
+**Launch gates:** [`SECURITY_AND_REMAINING_WORK.md`](../SECURITY_AND_REMAINING_WORK.md) (Tracks A–D)
 
 ---
 
