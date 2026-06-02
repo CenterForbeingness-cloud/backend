@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Protocol
 
@@ -14,6 +17,44 @@ from app.config import (
 _BASE_SCRIPT_PATH = Path(__file__).parent.parent.parent / "rag" / "raw" / "base" / "base_script.md"
 
 
+@dataclass(frozen=True)
+class RetrievalHit:
+    id: str
+    score: float
+    course_slug: Optional[str] = None
+    source_type: str = "text"
+    lesson: Optional[str] = None
+    week_number: Optional[int] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "score": self.score,
+            "course_slug": self.course_slug,
+            "source_type": self.source_type,
+            "lesson": self.lesson,
+            "week_number": self.week_number,
+        }
+
+
+@dataclass
+class RetrievalResult:
+    """Contexts for the LLM plus provenance for debugging and analytics."""
+
+    contexts: List[str] = field(default_factory=list)
+    retrievals: List[RetrievalHit] = field(default_factory=list)
+
+    @property
+    def rag_hit(self) -> bool:
+        return len(self.retrievals) > 0
+
+    @property
+    def top_score(self) -> Optional[float]:
+        if not self.retrievals:
+            return None
+        return max(hit.score for hit in self.retrievals)
+
+
 class ContextRetriever(Protocol):
     def retrieve(
         self,
@@ -22,7 +63,7 @@ class ContextRetriever(Protocol):
         *,
         course_slug: Optional[str] = None,
         week_number: Optional[int] = None,
-    ) -> List[str]: ...
+    ) -> RetrievalResult: ...
 
 
 class NoopRetriever:
@@ -33,8 +74,28 @@ class NoopRetriever:
         *,
         course_slug: Optional[str] = None,
         week_number: Optional[int] = None,
-    ) -> List[str]:
-        return []
+    ) -> RetrievalResult:
+        return RetrievalResult()
+
+
+def _hit_from_match(match: dict, *, course_slug: Optional[str]) -> Optional[RetrievalHit]:
+    meta = match.get("metadata") or {}
+    text = meta.get("text", "")
+    if not text:
+        return None
+    vector_id = str(match.get("id", ""))
+    score = float(match.get("score") or 0.0)
+    source_type = str(meta.get("source_type") or "text")
+    lesson = meta.get("lesson")
+    week = meta.get("week_number")
+    return RetrievalHit(
+        id=vector_id,
+        score=score,
+        course_slug=meta.get("course_slug") or course_slug,
+        source_type=source_type,
+        lesson=str(lesson) if lesson is not None else None,
+        week_number=int(week) if week is not None else None,
+    )
 
 
 class PineconeRetriever:
@@ -69,10 +130,9 @@ class PineconeRetriever:
         *,
         course_slug: Optional[str] = None,
         week_number: Optional[int] = None,
-    ) -> List[str]:
+    ) -> RetrievalResult:
         vector = self._embed(query)
 
-        # Build metadata filter
         if course_slug:
             meta_filter: dict = {
                 "namespace": {"$eq": "courses"},
@@ -92,14 +152,21 @@ class PineconeRetriever:
             )
         except Exception as exc:
             logger.warning("Pinecone query failed: %s", exc)
-            return []
+            return RetrievalResult()
 
-        chunks: List[str] = []
+        contexts: List[str] = []
+        retrievals: List[RetrievalHit] = []
         for match in result.get("matches", []):
-            text = (match.get("metadata") or {}).get("text", "")
-            if text:
-                chunks.append(text)
-        return chunks
+            meta = match.get("metadata") or {}
+            text = meta.get("text", "")
+            if not text:
+                continue
+            contexts.append(text)
+            hit = _hit_from_match(match, course_slug=course_slug)
+            if hit:
+                retrievals.append(hit)
+
+        return RetrievalResult(contexts=contexts, retrievals=retrievals)
 
 
 def load_base_script() -> Optional[str]:
@@ -126,9 +193,12 @@ def build_context_retriever() -> ContextRetriever:
 
     try:
         retriever = PineconeRetriever()
-        logger.info("PineconeRetriever initialised (index=%s, model=%s)", PINECONE_INDEX_NAME, EMBEDDING_MODEL)
+        logger.info(
+            "PineconeRetriever initialised (index=%s, model=%s)",
+            PINECONE_INDEX_NAME,
+            EMBEDDING_MODEL,
+        )
         return retriever
     except Exception as exc:
         logger.error("Failed to initialise PineconeRetriever: %s; using no-op", exc)
         return NoopRetriever()
-

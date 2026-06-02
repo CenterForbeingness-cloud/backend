@@ -26,7 +26,8 @@ from app.lesson_script import cached_lesson_beats, coach_reply
 from app.lesson_state import get_beat_index, set_beat_index
 from app.models import ChatRequest
 from app.quotas import check_quota, increment_message_count
-from app.rag import load_base_script
+from app.analytics import track_chat_message, track_rag_retrieval
+from app.rag import RetrievalResult, load_base_script
 from app.storage import SessionAccessError
 from app.user_profile import load_profile_prompt_block
 
@@ -52,6 +53,7 @@ class ChatTurnResult:
     memory_size: int
     day_number: Optional[int]
     scripted: bool
+    retrieval: Optional[RetrievalResult] = None
 
 
 def prepare_chat_context(
@@ -125,6 +127,28 @@ def prepare_chat_context(
     )
 
 
+def _fetch_retrieval(
+    context_retriever,
+    ctx: ChatContext,
+) -> RetrievalResult:
+    use_rag = ctx.schedule_system_block is None or ctx.req.week_number is not None
+    if not use_rag:
+        return RetrievalResult()
+    retrieval = context_retriever.retrieve(
+        ctx.req.message,
+        top_k=RAG_TOP_K,
+        course_slug=ctx.req.course_slug,
+        week_number=ctx.req.week_number,
+    )
+    track_rag_retrieval(
+        ctx.user_id,
+        retrieval,
+        course_slug=ctx.req.course_slug,
+        session_mode=ctx.req.mode,
+    )
+    return retrieval
+
+
 def _scripted_reply(ctx: ChatContext) -> Optional[str]:
     if not SCHEDULE_SCRIPT_ENGINE:
         logger.info("script engine off (SCHEDULE_SCRIPT_ENGINE=false)")
@@ -178,11 +202,11 @@ def _scripted_reply(ctx: ChatContext) -> Optional[str]:
 def produce_reply(
     ctx: ChatContext,
     context_retriever,
-) -> tuple[str, str, bool]:
-    """Return (reply, provider_used, scripted)."""
+) -> tuple[str, str, bool, RetrievalResult]:
+    """Return (reply, provider_used, scripted, retrieval)."""
     scripted = _scripted_reply(ctx)
     if scripted is not None:
-        return scripted, "script", True
+        return scripted, "script", True, RetrievalResult()
 
     if ctx.req.course_slug and ctx.schedule_day:
         logger.warning(
@@ -191,18 +215,7 @@ def produce_reply(
             ctx.schedule_day_number,
         )
 
-    retrieved_context: List[str] = []
-    use_rag = ctx.schedule_system_block is None or ctx.req.week_number is not None
-    if use_rag:
-        retrieved_context.extend(
-            context_retriever.retrieve(
-                ctx.req.message,
-                top_k=RAG_TOP_K,
-                course_slug=ctx.req.course_slug,
-                week_number=ctx.req.week_number,
-            )
-        )
-
+    retrieval = _fetch_retrieval(context_retriever, ctx)
     profile_block = load_profile_prompt_block(ctx.user_id)
 
     try:
@@ -210,7 +223,7 @@ def produce_reply(
             ctx.req.message,
             ctx.history,
             ctx.provider,
-            retrieved_context,
+            retrieval.contexts,
             base_script=_BASE_SCRIPT,
             schedule_system_block=ctx.schedule_system_block,
             profile_system_block=profile_block,
@@ -221,7 +234,7 @@ def produce_reply(
             status_code=500, detail="AI service error. Please try again."
         ) from exc
 
-    return reply, ctx.provider, False
+    return reply, ctx.provider, False, retrieval
 
 
 def finalize_chat_turn(
@@ -242,6 +255,13 @@ def finalize_chat_turn(
             background_tasks.add_task(
                 touch_course_activity, ctx.user_id, ctx.req.course_slug
             )
+        background_tasks.add_task(
+            track_chat_message,
+            ctx.user_id,
+            session_mode=ctx.req.mode,
+            course_slug=ctx.req.course_slug,
+            scripted=scripted,
+        )
 
     return ChatTurnResult(
         reply=reply,
@@ -262,10 +282,12 @@ def process_chat_turn(
     default_provider: str,
 ) -> ChatTurnResult:
     ctx = prepare_chat_context(req, user_id, chat_store, default_provider=default_provider)
-    reply, provider_used, scripted = produce_reply(ctx, context_retriever)
-    return finalize_chat_turn(
+    reply, provider_used, scripted, retrieval = produce_reply(ctx, context_retriever)
+    result = finalize_chat_turn(
         ctx, reply, chat_store, background_tasks, provider_used=provider_used, scripted=scripted
     )
+    result.retrieval = retrieval
+    return result
 
 
 def iter_scripted_sse(result: ChatTurnResult, session_id: str) -> Iterator[str]:
@@ -299,18 +321,7 @@ def iter_llm_sse(
     background_tasks: BackgroundTasks,
 ) -> Iterator[str]:
     """Stream OpenAI tokens when not on the script engine."""
-    retrieved_context: List[str] = []
-    use_rag = ctx.schedule_system_block is None or ctx.req.week_number is not None
-    if use_rag:
-        retrieved_context.extend(
-            context_retriever.retrieve(
-                ctx.req.message,
-                top_k=RAG_TOP_K,
-                course_slug=ctx.req.course_slug,
-                week_number=ctx.req.week_number,
-            )
-        )
-
+    retrieval = _fetch_retrieval(context_retriever, ctx)
     profile_block = load_profile_prompt_block(ctx.user_id)
 
     parts: List[str] = []
@@ -319,7 +330,7 @@ def iter_llm_sse(
             ctx.req.message,
             ctx.history,
             ctx.provider,
-            retrieved_context,
+            retrieval.contexts,
             base_script=_BASE_SCRIPT,
             schedule_system_block=ctx.schedule_system_block,
             profile_system_block=profile_block,

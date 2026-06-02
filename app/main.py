@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import logging
 import hashlib
 import hmac
@@ -8,7 +9,17 @@ import time
 from typing import Optional
 
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response, StreamingResponse
 from slowapi import _rate_limit_exceeded_handler
@@ -37,10 +48,12 @@ from app.config import (
     STRIPE_SECRET_KEY,
     STRIPE_WEBHOOK_SECRET,
 )
+from app.analytics import track, track_purchase_completed
 from app.models import (
     AdminLoginRequest,
     AdminTokenResponse,
     AdminTOTPVerifyRequest,
+    AnalyticsEventsRequest,
     BillingCheckoutRequest,
     BillingCheckoutResponse,
     BillingConfirmPaymentRequest,
@@ -49,7 +62,9 @@ from app.models import (
     BillingPaymentIntentResponse,
     ChatRequest,
     ChatResponse,
+    ChatVoiceResponse,
     ChatTokenResponse,
+    RetrievalHitResponse,
     CourseDetailResponse,
     CourseItem,
     CourseListResponse,
@@ -91,6 +106,13 @@ from app.user_profile import (
 )
 from app.admin_auth import admin_login, verify_totp as verify_admin_totp
 from app.rate_limit import AUTH_LIMIT, BILLING_LIMIT, CHAT_LIMIT, SESSIONS_LIMIT, limiter
+from app.voice import (
+    assert_voice_enabled,
+    check_voice_quota,
+    record_voice_usage,
+    synthesize_speech,
+    transcribe_audio,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -450,7 +472,9 @@ def chat_stream(
         ctx = prepare_chat_context(
             req, user_id, chat_store, default_provider=DEFAULT_PROVIDER
         )
-        reply, provider_used, scripted = produce_reply(ctx, context_retriever)
+        reply, provider_used, scripted, _retrieval = produce_reply(
+            ctx, context_retriever
+        )
         if scripted:
             result = finalize_chat_turn(
                 ctx,
@@ -471,6 +495,107 @@ def chat_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/chat/voice", response_model=ChatVoiceResponse)
+@CHAT_LIMIT
+async def chat_voice(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    session_id: str = Form(...),
+    audio: UploadFile = File(...),
+    course_slug: Optional[str] = Form(default=None),
+    provider: Optional[str] = Form(default=None),
+    week_number: Optional[int] = Form(default=None),
+    day_number: Optional[int] = Form(default=None),
+    _user: Optional[dict] = Depends(get_chat_user),
+) -> ChatVoiceResponse:
+    # TODO(post-MVP): upload TTS bytes to object storage; return signed URL instead of base64.
+    assert_voice_enabled()
+
+    user_id = _current_user_id(_user)
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio upload")
+
+    mime = audio.content_type or "audio/webm"
+    user_text, spoken_seconds = transcribe_audio(audio_bytes, mime_type=mime)
+
+    if user_id:
+        check_voice_quota(user_id, spoken_seconds)
+        track(
+            user_id,
+            "voice_utterance",
+            spoken_seconds=spoken_seconds,
+            course_slug=course_slug,
+        )
+
+    ai_provider = provider if provider in ("openai", "claude") else None
+    req = ChatRequest(
+        session_id=session_id,
+        message=user_text,
+        provider=ai_provider,
+        course_slug=course_slug,
+        week_number=week_number,
+        day_number=day_number,
+        mode="voice",
+    )
+
+    result = process_chat_turn(
+        req,
+        user_id,
+        chat_store,
+        context_retriever,
+        background_tasks,
+        default_provider=DEFAULT_PROVIDER,
+    )
+
+    audio_mp3, audio_mime = synthesize_speech(result.reply, course_slug=course_slug)
+
+    if user_id:
+        record_voice_usage(user_id, spoken_seconds)
+        background_tasks.add_task(
+            track,
+            user_id,
+            "voice_session_turn",
+            spoken_seconds=spoken_seconds,
+            course_slug=course_slug,
+            rag_hit=bool(result.retrieval and result.retrieval.rag_hit),
+        )
+
+    hits = []
+    retrieval = result.retrieval
+    if retrieval:
+        hits = [RetrievalHitResponse(**h.to_dict()) for h in retrieval.retrievals]
+
+    return ChatVoiceResponse(
+        session_id=session_id,
+        reply=result.reply,
+        transcript_user=user_text,
+        audio_base64=base64.b64encode(audio_mp3).decode("ascii"),
+        audio_mime=audio_mime,
+        provider_used=result.provider_used,
+        memory_size=result.memory_size,
+        day_number=result.day_number,
+        spoken_seconds=spoken_seconds,
+        rag_hit=bool(retrieval and retrieval.rag_hit),
+        retrievals=hits,
+    )
+
+
+@app.post("/analytics/events")
+@AUTH_LIMIT
+def ingest_analytics_events(
+    request: Request,
+    body: AnalyticsEventsRequest,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> dict:
+    user_id = _current_user_id(_user)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    for item in body.events:
+        track(user_id, item.event_name, **item.properties)
+    return {"ok": True, "count": len(body.events)}
 
 
 @app.post("/chat/token", response_model=ChatTokenResponse)
@@ -593,6 +718,11 @@ async def billing_webhook(request: Request, stripe_signature: str | None = Heade
                     stripe_reference_id=session_id,
                     stripe_session_id=session_id,
                 ):
+                    track_purchase_completed(
+                        user_id,
+                        course_slug,
+                        stripe_event_id=event_id,
+                    )
                     logger.info(
                         "Granted entitlement via webhook: user=%s course=%s",
                         user_id,
