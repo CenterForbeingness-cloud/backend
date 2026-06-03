@@ -109,6 +109,7 @@
       <div id="appMsg"></div>
       <div class="tabs">
         <button type="button" class="tab active" data-tab="users">App users</button>
+        <button type="button" class="tab" data-tab="courses">Courses</button>
         <button type="button" class="tab" data-tab="staff">Admin roles</button>
         <button type="button" class="tab" data-tab="audit">Audit log</button>
       </div>
@@ -128,15 +129,42 @@
         <div id="userDetail" class="hidden"></div>
       </section>
 
+      <section id="tab-courses" class="card hidden">
+        <h2 style="margin-top:0;font-size:1.1rem;">Course catalog</h2>
+        <p class="sub" style="margin-top:0;">From <code>GET /admin/courses</code> (DB + env Stripe prices).</p>
+        <div id="coursesTable"></div>
+      </section>
+
       <section id="tab-staff" class="card hidden">
         <h2 style="margin-top:0;font-size:1.1rem;">Admin account roles</h2>
-        <p class="sub" style="margin-top:0;">Only <strong>owner</strong> can change roles.</p>
+        <p class="sub" style="margin-top:0;">Only <strong>owner</strong> can add admins or change roles.</p>
+        <div id="staffCreate" class="hidden"></div>
         <div id="staffTable"></div>
       </section>
 
       <section id="tab-audit" class="card hidden">
-        <h2 style="margin-top:0;font-size:1.1rem;">Recent audit events</h2>
-        <button type="button" class="secondary" id="refreshAuditBtn">Refresh</button>
+        <h2 style="margin-top:0;font-size:1.1rem;">Audit log</h2>
+        <div class="row">
+          <div>
+            <label for="auditAction">Filter action</label>
+            <select id="auditAction">
+              <option value="">All</option>
+              <option value="GRANT_ENTITLEMENT">GRANT_ENTITLEMENT</option>
+              <option value="REVOKE_ENTITLEMENT">REVOKE_ENTITLEMENT</option>
+              <option value="ADMIN_LOGIN">ADMIN_LOGIN</option>
+              <option value="ADMIN_ROLE_CHANGE">ADMIN_ROLE_CHANGE</option>
+              <option value="ADMIN_USER_CREATE">ADMIN_USER_CREATE</option>
+              <option value="ADMIN_USER_DEACTIVATE">ADMIN_USER_DEACTIVATE</option>
+              <option value="ADMIN_USER_ACTIVATE">ADMIN_USER_ACTIVATE</option>
+            </select>
+          </div>
+          <div style="flex:0;display:flex;gap:8px;align-items:flex-end;">
+            <button type="button" class="secondary" id="auditPrevBtn">Prev</button>
+            <button type="button" class="secondary" id="auditNextBtn">Next</button>
+            <button type="button" class="secondary" id="refreshAuditBtn">Refresh</button>
+          </div>
+        </div>
+        <p class="sub" id="auditMeta"></p>
         <div id="auditResults"></div>
       </section>
     </div>
@@ -155,6 +183,9 @@
     let pendingEmail = "";
     let me = { role: "viewer", email: "", admin_id: "" };
     let selectedUserId = null;
+    let courseSlugs = [];
+    let auditOffset = 0;
+    const auditPageSize = 40;
 
     function token() { return localStorage.getItem(TOKEN_KEY) || ""; }
     function adminRole() { return me.role || localStorage.getItem(ROLE_KEY) || "viewer"; }
@@ -193,11 +224,27 @@
       $("whoami").innerHTML = `${me.email || ""} ${rolePill(adminRole())}`;
     }
 
+    function courseOptionsHtml(selected) {
+      const slugs = courseSlugs.length ? courseSlugs : ["week-zero-reset", "starter-bundle"];
+      return slugs.map((c) =>
+        `<option value="${c}" ${c === selected ? "selected" : ""}>${c}</option>`).join("");
+    }
+
+    async function loadCourses() {
+      try {
+        const data = await api("/admin/courses");
+        courseSlugs = (data.courses || []).map((c) => c.course_slug);
+      } catch (_) {
+        courseSlugs = [];
+      }
+    }
+
     async function showApp() {
       loginView.classList.add("hidden");
       appView.classList.remove("hidden");
       try {
         await refreshMe();
+        await loadCourses();
       } catch (_) {
         showLogin();
         return;
@@ -260,27 +307,20 @@
       btn.addEventListener("click", () => {
         document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
-        ["users", "staff", "audit"].forEach((t) => {
+        ["users", "courses", "staff", "audit"].forEach((t) => {
           $("tab-" + t).classList.toggle("hidden", btn.dataset.tab !== t);
         });
+        if (btn.dataset.tab === "courses") loadCoursesTab();
         if (btn.dataset.tab === "staff") loadStaff();
-        if (btn.dataset.tab === "audit") loadAudit();
+        if (btn.dataset.tab === "audit") { auditOffset = 0; loadAudit(); }
       });
     });
-
-    const COURSES = [
-      "week-zero-reset",
-      "deep-calm-protocol",
-      "focus-discipline",
-      "mindful-foundations",
-      "starter-bundle",
-    ];
 
     function renderUserRow(u) {
       const owned = (u.owned_courses || []).map((c) => `<span class="pill">${c}</span>`).join(" ") || "—";
       const actions = canMutate()
         ? (() => {
-            const opts = COURSES.map((c) => `<option value="${c}">${c}</option>`).join("");
+            const opts = courseOptionsHtml();
             return `<select id="course-${u.user_id}">${opts}</select>
               <button type="button" onclick="grantCourse('${u.user_id}')">Grant</button>
               <button type="button" class="secondary" onclick="revokeCourse('${u.user_id}')">Revoke</button>`;
@@ -329,7 +369,7 @@
         const profile = d.profile || {};
         const mutate = canMutate()
           ? `<div class="row" style="margin-top:12px;">
-              <select id="detailCourse">${COURSES.map((c) => `<option value="${c}">${c}</option>`).join("")}</select>
+              <select id="detailCourse">${courseOptionsHtml()}</select>
               <button type="button" onclick="grantCourse('${userId}', true)">Grant</button>
               <button type="button" class="secondary" onclick="revokeCourse('${userId}', true)">Revoke all for slug</button>
             </div>`
@@ -361,7 +401,7 @@
 
     window.grantCourse = async (userId, fromDetail) => {
       const sel = fromDetail ? $("detailCourse") : $("course-" + userId);
-      const slug = sel?.value || COURSES[0];
+      const slug = sel?.value || courseSlugs[0] || "week-zero-reset";
       if (!confirm(`Grant "${slug}" to this user?`)) return;
       try {
         const data = await api("/admin/entitlements/grant", {
@@ -378,7 +418,7 @@
 
     window.revokeCourse = async (userId, fromDetail) => {
       const sel = fromDetail ? $("detailCourse") : $("course-" + userId);
-      const slug = sel?.value || COURSES[0];
+      const slug = sel?.value || courseSlugs[0] || "week-zero-reset";
       if (!confirm(`Revoke "${slug}" (and bundle children if applicable)?`)) return;
       try {
         const data = await api("/admin/entitlements/revoke", {
@@ -412,34 +452,103 @@
       }
     });
 
+    async function loadCoursesTab() {
+      const box = $("coursesTable");
+      try {
+        const data = await api("/admin/courses");
+        const courses = data.courses || [];
+        if (!courses.length) {
+          box.innerHTML = "<p class=\"sub\">No courses returned.</p>";
+          return;
+        }
+        box.innerHTML = `<table><thead><tr><th>Slug</th><th>Title</th><th>Stripe price</th><th>Bundle includes</th></tr></thead><tbody>
+          ${courses.map((c) => `<tr>
+            <td><code>${c.course_slug}</code></td>
+            <td>${c.title || ""}</td>
+            <td><code>${c.price_id || "—"}</code></td>
+            <td>${(c.bundle_included_slugs || []).map((s) => `<span class="pill">${s}</span>`).join(" ") || "—"}</td>
+          </tr>`).join("")}
+        </tbody></table>`;
+      } catch (e) {
+        box.innerHTML = `<div class="msg err">${e.message}</div>`;
+      }
+    }
+
     async function loadStaff() {
+      const createBox = $("staffCreate");
       const box = $("staffTable");
       if (adminRole() === "viewer") {
+        createBox.classList.add("hidden");
         box.innerHTML = "<p class=\"sub\">Viewers cannot manage admin accounts.</p>";
         return;
+      }
+      const canEdit = adminRole() === "owner";
+      if (canEdit) {
+        createBox.classList.remove("hidden");
+        createBox.innerHTML = `
+          <h3>Add admin</h3>
+          <div class="row">
+            <div><label>Email</label><input id="newAdminEmail" type="email" /></div>
+            <div><label>Password (8+)</label><input id="newAdminPassword" type="password" /></div>
+            <div><label>Role</label>
+              <select id="newAdminRole">
+                <option value="viewer">viewer</option>
+                <option value="editor">editor</option>
+                <option value="owner">owner</option>
+              </select>
+            </div>
+            <div style="flex:0;"><button type="button" id="createAdminBtn">Create + 2FA</button></div>
+          </div>
+          <div id="totpReveal" class="hidden msg ok"></div>`;
+        $("createAdminBtn").onclick = createAdmin;
+      } else {
+        createBox.classList.add("hidden");
       }
       try {
         const data = await api("/admin/staff");
         const staff = data.staff || [];
-        const canEdit = adminRole() === "owner";
         box.innerHTML = `<table><thead><tr><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
           ${staff.map((s) => {
             const roles = ["owner", "editor", "viewer"].map((r) =>
               `<option value="${r}" ${r === s.role ? "selected" : ""}>${r}</option>`).join("");
+            const self = s.admin_id === me.admin_id;
             return `<tr>
               <td>${s.email}<br/><code style="font-size:0.75rem">${s.admin_id}</code></td>
               <td>${canEdit
                 ? `<select id="role-${s.admin_id}">${roles}</select>`
                 : rolePill(s.role)}</td>
               <td>${s.is_active ? "active" : "inactive"} · 2FA ${s.totp_enabled ? "on" : "off"}</td>
-              <td>${canEdit
-                ? `<button type="button" onclick="saveRole('${s.admin_id}', '${s.email.replace(/'/g, "\\'")}')">Save role</button>`
-                : ""}</td>
+              <td>${canEdit ? `
+                <button type="button" onclick="saveRole('${s.admin_id}', '${s.email.replace(/'/g, "\\'")}')">Save role</button>
+                ${self ? "" : `<button type="button" class="secondary" onclick="toggleActive('${s.admin_id}', '${s.email.replace(/'/g, "\\'")}', ${!s.is_active})">${s.is_active ? "Deactivate" : "Activate"}</button>`}
+              ` : ""}</td>
             </tr>`;
           }).join("")}
         </tbody></table>`;
       } catch (e) {
         box.innerHTML = `<div class="msg err">${e.message}</div>`;
+      }
+    }
+
+    async function createAdmin() {
+      const email = $("newAdminEmail").value.trim();
+      const password = $("newAdminPassword").value;
+      const role = $("newAdminRole").value;
+      if (!confirm(`Create admin ${email} (${role})?`)) return;
+      try {
+        const data = await api("/admin/staff", {
+          method: "POST",
+          body: JSON.stringify({ email, password, role }),
+        });
+        const reveal = $("totpReveal");
+        reveal.classList.remove("hidden");
+        reveal.innerHTML = `<strong>Save TOTP now</strong> (shown once):<br/>
+          Secret: <code>${data.totp_secret}</code><br/>
+          URI: <code style="word-break:break-all">${data.totp_provisioning_uri}</code>`;
+        showMsg($("appMsg"), `Created ${data.email} — scan QR / enter secret in authenticator.`, true);
+        loadStaff();
+      } catch (e) {
+        showMsg($("appMsg"), e.message, false);
       }
     }
 
@@ -458,25 +567,56 @@
       }
     };
 
+    window.toggleActive = async (adminId, email, activate) => {
+      const verb = activate ? "Activate" : "Deactivate";
+      if (!confirm(`${verb} ${email}?`)) return;
+      try {
+        const data = await api("/admin/staff/" + adminId, {
+          method: "PATCH",
+          body: JSON.stringify({ is_active: activate }),
+        });
+        showMsg($("appMsg"), `${data.email} is now ${data.is_active ? "active" : "inactive"}.`, true);
+        loadStaff();
+      } catch (e) {
+        showMsg($("appMsg"), e.message, false);
+      }
+    };
+
     async function loadAudit() {
       const box = $("auditResults");
+      const action = $("auditAction")?.value || "";
+      let url = `/admin/audit-log?limit=${auditPageSize}&offset=${auditOffset}`;
+      if (action) url += "&action=" + encodeURIComponent(action);
       try {
-        const data = await api("/admin/audit-log?limit=40");
+        const data = await api(url);
         const logs = data.logs || [];
-        box.innerHTML = `<table><thead><tr><th>When</th><th>Action</th><th>Resource</th><th>Details</th></tr></thead><tbody>
+        const total = data.total || 0;
+        $("auditMeta").textContent = `Showing ${auditOffset + 1}–${auditOffset + logs.length} of ${total}`;
+        $("auditPrevBtn").disabled = auditOffset <= 0;
+        $("auditNextBtn").disabled = auditOffset + logs.length >= total;
+        box.innerHTML = logs.length ? `<table><thead><tr><th>When</th><th>Action</th><th>Resource</th><th>Details</th></tr></thead><tbody>
           ${logs.map((l) => `<tr>
             <td><small>${l.created_at}</small></td>
             <td>${l.action}</td>
             <td>${l.resource_type}<br/><code>${l.resource_id || ""}</code></td>
             <td><code style="font-size:0.75rem">${JSON.stringify(l.details || {})}</code></td>
           </tr>`).join("")}
-        </tbody></table>`;
+        </tbody></table>` : "<p class=\"sub\">No events for this filter.</p>";
       } catch (e) {
         box.innerHTML = `<div class="msg err">${e.message}</div>`;
       }
     }
 
-    $("refreshAuditBtn").addEventListener("click", loadAudit);
+    $("refreshAuditBtn").addEventListener("click", () => { auditOffset = 0; loadAudit(); });
+    $("auditAction")?.addEventListener("change", () => { auditOffset = 0; loadAudit(); });
+    $("auditPrevBtn").addEventListener("click", () => {
+      auditOffset = Math.max(0, auditOffset - auditPageSize);
+      loadAudit();
+    });
+    $("auditNextBtn").addEventListener("click", () => {
+      auditOffset += auditPageSize;
+      loadAudit();
+    });
 
     (async () => {
       if (!token()) return;

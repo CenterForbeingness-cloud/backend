@@ -17,8 +17,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Security, status
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.admin_auth import list_admin_staff, update_admin_role, verify_admin_token
-from app.config import FAIR_USE_LIMIT, SUPABASE_DB_URL, logger
+from app.admin_auth import (
+    create_admin_user,
+    generate_totp_secret,
+    list_admin_staff,
+    set_totp_secret,
+    update_admin_staff,
+    verify_admin_token,
+)
+from app.config import ADMIN_2FA_ISSUER, FAIR_USE_LIMIT, STRIPE_PRICE_BY_COURSE_SLUG, SUPABASE_DB_URL, logger
+from app.courses import list_courses
+from app.entitlements import BUNDLE_INCLUDED_COURSES
 from app.user_profile import get_user_profile
 from app.daily_schedule import validate_course_slug
 from app.entitlements import (
@@ -32,6 +41,10 @@ from app.models import (
     AdminAnalyticsEventRow,
     AdminAuditLogEntry,
     AdminAuditLogResponse,
+    AdminCourseItem,
+    AdminCoursesResponse,
+    AdminCreateStaffRequest,
+    AdminCreateStaffResponse,
     AdminEntitlementMutationResponse,
     AdminEntitlementRow,
     AdminGrantEntitlementRequest,
@@ -40,8 +53,8 @@ from app.models import (
     AdminRevokeEntitlementRequest,
     AdminStaffListResponse,
     AdminStaffMember,
-    AdminUpdateRoleRequest,
-    AdminUpdateRoleResponse,
+    AdminUpdateStaffRequest,
+    AdminUpdateStaffResponse,
     AdminUsageSnippet,
     AdminUserDetailResponse,
     AdminUserProfileSnippet,
@@ -58,6 +71,16 @@ _MUTATION_ROLES = frozenset({"owner", "editor"})
 _OWNER_ROLE = "owner"
 
 _ADMIN_UI_DIR = Path(__file__).resolve().parent.parent / "static" / "admin"
+
+_AUDIT_FILTER_ACTIONS = frozenset({
+    "GRANT_ENTITLEMENT",
+    "REVOKE_ENTITLEMENT",
+    "ADMIN_LOGIN",
+    "ADMIN_ROLE_CHANGE",
+    "ADMIN_USER_CREATE",
+    "ADMIN_USER_DEACTIVATE",
+    "ADMIN_USER_ACTIVATE",
+})
 
 
 def get_current_admin(
@@ -459,20 +482,84 @@ def get_admin_user_detail(user_id: str) -> AdminUserDetailResponse:
     )
 
 
-def list_admin_audit_log(*, limit: int, offset: int) -> AdminAuditLogResponse:
+def list_admin_courses() -> AdminCoursesResponse:
+    """Published catalog + env price fallbacks and bundle children."""
+    raw = list_courses()
+    by_slug: dict[str, AdminCourseItem] = {}
+
+    for course in raw:
+        slug = str(course.get("course_slug") or "").strip()
+        if not slug:
+            continue
+        included = list(BUNDLE_INCLUDED_COURSES.get(slug, ()))
+        by_slug[slug] = AdminCourseItem(
+            course_slug=slug,
+            title=str(course.get("title") or slug),
+            price_id=course.get("price_id"),
+            is_published=True,
+            bundle_included_slugs=included,
+        )
+
+    for slug in BUNDLE_INCLUDED_COURSES:
+        if slug not in by_slug:
+            by_slug[slug] = AdminCourseItem(
+                course_slug=slug,
+                title=slug.replace("-", " ").title(),
+                price_id=STRIPE_PRICE_BY_COURSE_SLUG.get(slug),
+                is_published=True,
+                bundle_included_slugs=list(BUNDLE_INCLUDED_COURSES[slug]),
+            )
+
+    for slug, price_id in STRIPE_PRICE_BY_COURSE_SLUG.items():
+        if slug not in by_slug:
+            by_slug[slug] = AdminCourseItem(
+                course_slug=slug,
+                title=slug.replace("-", " ").title(),
+                price_id=price_id,
+                is_published=True,
+                bundle_included_slugs=list(BUNDLE_INCLUDED_COURSES.get(slug, ())),
+            )
+
+    courses = sorted(by_slug.values(), key=lambda c: c.course_slug)
+    return AdminCoursesResponse(courses=courses)
+
+
+def list_admin_audit_log(
+    *,
+    limit: int,
+    offset: int,
+    action: Optional[str] = None,
+) -> AdminAuditLogResponse:
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
+
+    if action is not None:
+        action = action.strip()
+        if action and action not in _AUDIT_FILTER_ACTIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid action filter. Allowed: {', '.join(sorted(_AUDIT_FILTER_ACTIONS))}",
+            )
 
     try:
         from app.db import db_connection
 
+        where_sql = ""
+        params: list[Any] = []
+        if action:
+            where_sql = " WHERE action = %s"
+            params.append(action)
+
         with db_connection() as conn, conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM public.admin_audit_log")
+            cur.execute(
+                f"SELECT COUNT(*) FROM public.admin_audit_log{where_sql}",
+                params,
+            )
             total_row = cur.fetchone()
             total = int(total_row[0]) if total_row else 0
 
             cur.execute(
-                """
+                f"""
                 SELECT
                     id,
                     admin_id::text,
@@ -482,10 +569,11 @@ def list_admin_audit_log(*, limit: int, offset: int) -> AdminAuditLogResponse:
                     details,
                     created_at
                 FROM public.admin_audit_log
+                {where_sql}
                 ORDER BY created_at DESC
                 LIMIT %s OFFSET %s
                 """,
-                (limit, offset),
+                (*params, limit, offset),
             )
             rows = cur.fetchall()
     except Exception as exc:
@@ -553,41 +641,126 @@ def admin_list_staff(
     )
 
 
-@router.patch("/staff/{admin_id}", response_model=AdminUpdateRoleResponse)
-def admin_update_staff_role(
-    admin_id: str,
+@router.post("/staff", response_model=AdminCreateStaffResponse)
+def admin_create_staff(
     request: Request,
-    body: AdminUpdateRoleRequest,
+    body: AdminCreateStaffRequest,
     admin: dict = Depends(get_current_admin),
-) -> AdminUpdateRoleResponse:
-    """Change admin_users.role (owner only)."""
+) -> AdminCreateStaffResponse:
+    """Create admin account and enroll TOTP (owner only)."""
     _require_owner_role(admin)
-    updated, error = update_admin_role(admin_id, body.role)
-    if error or not updated:
-        raise HTTPException(status_code=400, detail=error or "Update failed")
 
-    previous = str(updated.get("previous_role") or body.role)
+    new_id, error = create_admin_user(body.email, body.password, body.role)
+    if error or not new_id:
+        raise HTTPException(status_code=400, detail=error or "Create failed")
+
+    import pyotp
+
+    totp_secret = generate_totp_secret()
+    ok, totp_err = set_totp_secret(body.email.strip(), totp_secret)
+    if not ok:
+        raise HTTPException(status_code=500, detail=totp_err or "Failed to set TOTP")
+
+    totp = pyotp.TOTP(totp_secret)
+    provisioning_uri = totp.provisioning_uri(
+        name=body.email.strip(),
+        issuer_name=ADMIN_2FA_ISSUER,
+    )
+
     write_admin_audit_log(
         admin_id=str(admin["sub"]),
-        action="ADMIN_ROLE_CHANGE",
+        action="ADMIN_USER_CREATE",
         resource_type="admin",
-        resource_id=str(updated["admin_id"]),
-        details={
-            "email": updated["email"],
-            "previous_role": previous,
-            "new_role": updated["role"],
-        },
+        resource_id=new_id,
+        details={"email": body.email.strip(), "role": body.role},
         request=request,
         http_status_code=200,
     )
 
-    return AdminUpdateRoleResponse(
+    return AdminCreateStaffResponse(
+        ok=True,
+        admin_id=new_id,
+        email=body.email.strip(),
+        role=body.role,
+        totp_secret=totp_secret,
+        totp_provisioning_uri=provisioning_uri,
+    )
+
+
+@router.patch("/staff/{admin_id}", response_model=AdminUpdateStaffResponse)
+def admin_update_staff_member(
+    admin_id: str,
+    request: Request,
+    body: AdminUpdateStaffRequest,
+    admin: dict = Depends(get_current_admin),
+) -> AdminUpdateStaffResponse:
+    """Change admin role and/or active status (owner only)."""
+    _require_owner_role(admin)
+
+    if str(admin.get("sub")) == admin_id and body.is_active is False:
+        raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
+
+    updated, error = update_admin_staff(
+        admin_id,
+        role=body.role,
+        is_active=body.is_active,
+    )
+    if error or not updated:
+        raise HTTPException(status_code=400, detail=error or "Update failed")
+
+    previous_role = str(updated.get("previous_role") or updated["role"])
+    previous_active = bool(updated.get("previous_is_active", updated["is_active"]))
+
+    if body.role is not None and previous_role != updated["role"]:
+        write_admin_audit_log(
+            admin_id=str(admin["sub"]),
+            action="ADMIN_ROLE_CHANGE",
+            resource_type="admin",
+            resource_id=str(updated["admin_id"]),
+            details={
+                "email": updated["email"],
+                "previous_role": previous_role,
+                "new_role": updated["role"],
+            },
+            request=request,
+            http_status_code=200,
+        )
+
+    if body.is_active is not None and previous_active != updated["is_active"]:
+        audit_action = (
+            "ADMIN_USER_ACTIVATE" if updated["is_active"] else "ADMIN_USER_DEACTIVATE"
+        )
+        write_admin_audit_log(
+            admin_id=str(admin["sub"]),
+            action=audit_action,
+            resource_type="admin",
+            resource_id=str(updated["admin_id"]),
+            details={
+                "email": updated["email"],
+                "previous_is_active": previous_active,
+                "is_active": updated["is_active"],
+            },
+            request=request,
+            http_status_code=200,
+        )
+
+    return AdminUpdateStaffResponse(
         ok=True,
         admin_id=str(updated["admin_id"]),
         email=str(updated["email"]),
         role=str(updated["role"]),
-        previous_role=previous,
+        is_active=bool(updated["is_active"]),
+        previous_role=previous_role,
+        previous_is_active=previous_active,
     )
+
+
+@router.get("/courses", response_model=AdminCoursesResponse)
+def admin_list_courses(
+    _admin: dict = Depends(get_current_admin),
+) -> AdminCoursesResponse:
+    """Published courses, Stripe price IDs, and bundle children."""
+    return list_admin_courses()
 
 
 @router.get("/users/{user_id}", response_model=AdminUserDetailResponse)
@@ -672,7 +845,8 @@ def admin_revoke_endpoint(
 def admin_audit_log_endpoint(
     limit: int = 100,
     offset: int = 0,
+    action: Optional[str] = None,
     _admin: dict = Depends(get_current_admin),
 ) -> AdminAuditLogResponse:
-    """A5: Paginated admin audit log."""
-    return list_admin_audit_log(limit=limit, offset=offset)
+    """A5: Paginated admin audit log with optional action filter."""
+    return list_admin_audit_log(limit=limit, offset=offset, action=action)

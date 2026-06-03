@@ -210,41 +210,46 @@ def verify_admin_token(token: str) -> Optional[dict]:
         return None
 
 
-def create_admin_user(email: str, password: str, role: str) -> Tuple[bool, Optional[str]]:
+def create_admin_user(email: str, password: str, role: str) -> Tuple[Optional[str], Optional[str]]:
     """
     Create a new admin user with bcrypt-hashed password.
     TOTP secret must be generated separately via generate_totp_secret().
-    
-    Args:
-        email: Admin email address
-        password: Admin password (plaintext, will be hashed)
-        role: Admin role ('owner', 'editor', 'viewer')
-    
+
     Returns:
-        Tuple[success, error_message]
+        Tuple[admin_id, error_message] — admin_id set on success.
     """
+    allowed = {"owner", "editor", "viewer"}
+    if role not in allowed:
+        return None, f"Invalid role. Must be one of: {', '.join(sorted(allowed))}"
+
     try:
         import bcrypt
-        
-        # Hash password with bcrypt
-        password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
-        
+
+        password_hash = bcrypt.hashpw(
+            password.encode("utf-8"), bcrypt.gensalt(rounds=12)
+        ).decode("utf-8")
+
         with _get_db_connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO public.admin_users (email, password_hash, role, is_active)
                 VALUES (%s, %s, %s, TRUE)
+                RETURNING id::text
                 """,
-                (email, password_hash, role),
+                (email.strip(), password_hash, role),
             )
-            logger.info("Created admin user: %s role=%s", email, role)
-            return True, None
+            row = cur.fetchone()
+            if not row:
+                return None, "Failed to create admin user"
+            admin_id = str(row[0])
+            logger.info("Created admin user: %s role=%s id=%s", email, role, admin_id)
+            return admin_id, None
     except Exception as exc:
         if "unique constraint" in str(exc).lower():
             logger.warning("Admin user already exists: %s", email)
-            return False, "Email already registered as admin"
+            return None, "Email already registered as admin"
         logger.exception("create_admin_user failed: %s", exc)
-        return False, "Failed to create admin user"
+        return None, "Failed to create admin user"
 
 
 def list_admin_staff() -> list[dict]:
@@ -340,6 +345,98 @@ def update_admin_role(admin_id: str, new_role: str) -> tuple[Optional[dict], Opt
     except Exception as exc:
         logger.exception("update_admin_role failed admin=%s: %s", admin_id, exc)
         return None, "Failed to update admin role"
+
+
+def update_admin_staff(
+    admin_id: str,
+    *,
+    role: Optional[str] = None,
+    is_active: Optional[bool] = None,
+) -> tuple[Optional[dict], Optional[str]]:
+    """
+    Update role and/or is_active for an admin_users row.
+
+    Returns (updated_row_dict, error_message).
+    """
+    if role is None and is_active is None:
+        return None, "Provide role and/or is_active"
+
+    try:
+        admin_uuid = str(__import__("uuid").UUID(admin_id))
+    except ValueError:
+        return None, "Invalid admin_id"
+
+    updated_row: Optional[dict] = None
+    error: Optional[str] = None
+
+    if role is not None:
+        updated_row, error = update_admin_role(admin_uuid, role)
+        if error:
+            return None, error
+
+    if is_active is not None:
+        try:
+            with _get_db_connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT email, role, is_active
+                    FROM public.admin_users
+                    WHERE id = %s
+                    """,
+                    (admin_uuid,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return None, "Admin user not found"
+
+                old_email, old_role, old_active = row[0], row[1], bool(row[2])
+                if old_active == is_active:
+                    active_row = updated_row or {
+                        "admin_id": admin_uuid,
+                        "email": old_email,
+                        "role": old_role,
+                        "is_active": is_active,
+                        "previous_is_active": old_active,
+                    }
+                    updated_row = active_row
+                else:
+                    cur.execute(
+                        """
+                        UPDATE public.admin_users
+                        SET is_active = %s
+                        WHERE id = %s
+                        RETURNING id::text, email, role, is_active, totp_enabled, last_login
+                        """,
+                        (is_active, admin_uuid),
+                    )
+                    u = cur.fetchone()
+                    if not u:
+                        return None, "Failed to update admin status"
+                    updated_row = {
+                        "admin_id": u[0],
+                        "email": u[1],
+                        "role": u[2],
+                        "is_active": bool(u[3]),
+                        "totp_enabled": bool(u[4]),
+                        "last_login": u[5],
+                        "previous_is_active": old_active,
+                        "previous_role": updated_row.get("previous_role")
+                        if updated_row
+                        else old_role,
+                    }
+        except Exception as exc:
+            logger.exception("update_admin_staff is_active failed: %s", exc)
+            return None, "Failed to update admin status"
+
+    if updated_row is None:
+        return None, "Admin user not found"
+
+    if "previous_is_active" not in updated_row:
+        updated_row["previous_is_active"] = updated_row.get("is_active")
+    if "previous_role" not in updated_row:
+        updated_row["previous_role"] = updated_row.get("role")
+
+    return updated_row, None
 
 
 def generate_totp_secret() -> str:

@@ -33,8 +33,8 @@ def _cmd_create(args: argparse.Namespace) -> int:
         print("Password must be at least 8 characters", file=sys.stderr)
         return 1
 
-    ok, err = create_admin_user(args.email, args.password, args.role)
-    if not ok:
+    admin_id, err = create_admin_user(args.email, args.password, args.role)
+    if err or not admin_id:
         print(f"Failed: {err}", file=sys.stderr)
         return 1
     print(f"Created admin: {args.email} (role={args.role})")
