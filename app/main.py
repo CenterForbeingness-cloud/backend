@@ -104,6 +104,7 @@ from app.user_profile import (
     profile_has_launch_memory,
     upsert_user_profile,
 )
+from app.admin_api import router as admin_router, write_admin_audit_log
 from app.admin_auth import admin_login, verify_totp as verify_admin_totp
 from app.rate_limit import AUTH_LIMIT, BILLING_LIMIT, CHAT_LIMIT, SESSIONS_LIMIT, limiter
 from app.voice import (
@@ -128,6 +129,8 @@ app.add_middleware(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
+
+app.include_router(admin_router)
 
 chat_store = build_chat_store()
 context_retriever = build_context_retriever()
@@ -371,12 +374,23 @@ def _raise_for_stripe_error(resp: httpx.Response, *, fallback: str) -> None:
 
 def _resolve_checkout_course_slug(price_id: str) -> Optional[str]:
     """
-    Resolve server-side price_id -> course_slug mapping from course catalog.
+    Resolve server-side price_id -> course_slug mapping.
+
+    Checks STRIPE_PRICE_* env vars first (Railway-friendly), then the course catalog.
     """
+    from app.config import STRIPE_PRICE_BY_COURSE_SLUG
     from app.courses import list_courses
 
+    normalized = str(price_id or "").strip()
+    if not normalized:
+        return None
+
+    for slug, mapped in STRIPE_PRICE_BY_COURSE_SLUG.items():
+        if mapped == normalized:
+            return slug
+
     for course in list_courses():
-        if str(course.get("price_id") or "").strip() == price_id:
+        if str(course.get("price_id") or "").strip() == normalized:
             slug = str(course.get("course_slug") or "").strip()
             return slug or None
     return None
@@ -1298,8 +1312,21 @@ def admin_verify_totp_endpoint(request: Request, req: AdminTOTPVerifyRequest) ->
     try:
         payload = jwt.decode(admin_token, options={"verify_signature": False})
         role = payload.get("admin_role", "viewer")
+        admin_id = str(payload.get("sub") or "")
     except Exception:
         role = "viewer"
+        admin_id = ""
+
+    if admin_id:
+        write_admin_audit_log(
+            admin_id=admin_id,
+            action="ADMIN_LOGIN",
+            resource_type="admin",
+            resource_id=req.email,
+            details={"email": req.email, "role": role},
+            request=request,
+            http_status_code=200,
+        )
 
     return AdminTokenResponse(
         admin_token=admin_token,

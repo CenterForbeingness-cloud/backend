@@ -224,5 +224,75 @@ class AdminTokenResponse(BaseModel):
     role: str
 
 
+class AdminGrantEntitlementRequest(BaseModel):
+    user_id: str = Field(..., min_length=36, max_length=36)
+    course_slug: str = Field(..., min_length=1, max_length=80)
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class AdminRevokeEntitlementRequest(BaseModel):
+    user_id: str = Field(..., min_length=36, max_length=36)
+    course_slug: str = Field(..., min_length=1, max_length=80)
+    reason: Optional[str] = Field(default=None, max_length=200)
+
+
+class AdminEntitlementMutationResponse(BaseModel):
+    ok: bool
+    granted_slugs: list[str] = Field(default_factory=list)
+    revoked_slugs: list[str] = Field(default_factory=list)
+
+
+class AdminUserSummary(BaseModel):
+    user_id: str
+    email: Optional[str] = None
+    owned_courses: list[str] = Field(default_factory=list)
+    messages_today: int = 0
+    chat_plan: str = "free"
+
+
+class AdminUsersResponse(BaseModel):
+    users: list[AdminUserSummary]
+
+
+class AdminAuditLogEntry(BaseModel):
+    id: int
+    admin_id: str
+    action: str
+    resource_type: str
+    resource_id: Optional[str] = None
+    details: Optional[dict] = None
+    created_at: datetime
+
+
+class AdminAuditLogResponse(BaseModel):
+    logs: list[AdminAuditLogEntry]
+    total: int
+
+
+class AdminStaffMember(BaseModel):
+    admin_id: str
+    email: str
+    role: str
+    is_active: bool = True
+    totp_enabled: bool = False
+    last_login: Optional[datetime] = None
+
+
+class AdminStaffListResponse(BaseModel):
+    staff: list[AdminStaffMember]
+
+
+class AdminUpdateRoleRequest(BaseModel):
+    role: str = Field(..., pattern="^(owner|editor|viewer)$")
+
+
+class AdminUpdateRoleResponse(BaseModel):
+    ok: bool
+    admin_id: str
+    email: str
+    role: str
+    previous_role: str
+
+
 def generate_session_id() -> str:
     return f"session-{uuid4().hex}"

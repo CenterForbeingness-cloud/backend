@@ -247,6 +247,101 @@ def create_admin_user(email: str, password: str, role: str) -> Tuple[bool, Optio
         return False, "Failed to create admin user"
 
 
+def list_admin_staff() -> list[dict]:
+    """Return all admin_users rows (for owner/editor staff management UI)."""
+    with _get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                id::text,
+                email,
+                role,
+                is_active,
+                totp_enabled,
+                last_login
+            FROM public.admin_users
+            ORDER BY email
+            """
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "admin_id": row[0],
+            "email": row[1],
+            "role": row[2],
+            "is_active": bool(row[3]),
+            "totp_enabled": bool(row[4]),
+            "last_login": row[5],
+        }
+        for row in rows
+    ]
+
+
+def update_admin_role(admin_id: str, new_role: str) -> tuple[Optional[dict], Optional[str]]:
+    """
+    Change an admin_users.role value.
+
+    Returns (updated_row_dict, error_message).
+    """
+    allowed = {"owner", "editor", "viewer"}
+    if new_role not in allowed:
+        return None, f"Invalid role. Must be one of: {', '.join(sorted(allowed))}"
+
+    try:
+        admin_uuid = str(__import__("uuid").UUID(admin_id))
+    except ValueError:
+        return None, "Invalid admin_id"
+
+    try:
+        with _get_db_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT email, role
+                FROM public.admin_users
+                WHERE id = %s
+                """,
+                (admin_uuid,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None, "Admin user not found"
+
+            old_email, old_role = row[0], row[1]
+            if old_role == new_role:
+                return {
+                    "admin_id": admin_uuid,
+                    "email": old_email,
+                    "role": new_role,
+                    "previous_role": old_role,
+                }, None
+
+            cur.execute(
+                """
+                UPDATE public.admin_users
+                SET role = %s
+                WHERE id = %s
+                RETURNING id::text, email, role, is_active, totp_enabled, last_login
+                """,
+                (new_role, admin_uuid),
+            )
+            updated = cur.fetchone()
+            if not updated:
+                return None, "Failed to update role"
+
+            return {
+                "admin_id": updated[0],
+                "email": updated[1],
+                "role": updated[2],
+                "is_active": bool(updated[3]),
+                "totp_enabled": bool(updated[4]),
+                "last_login": updated[5],
+                "previous_role": old_role,
+            }, None
+    except Exception as exc:
+        logger.exception("update_admin_role failed admin=%s: %s", admin_id, exc)
+        return None, "Failed to update admin role"
+
+
 def generate_totp_secret() -> str:
     """
     Generate a new TOTP secret (base32 encoded).
