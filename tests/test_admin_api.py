@@ -187,6 +187,66 @@ def test_admin_ip_middleware_blocks_when_configured() -> None:
     assert res.json()["detail"] == "Admin access restricted by IP"
 
 
+def test_list_admin_courses_includes_bundle_children() -> None:
+    from app.admin_api import list_admin_courses
+
+    with patch(
+        "app.admin_api.list_courses",
+        return_value=[
+            {
+                "course_slug": "starter-bundle",
+                "title": "Starter Bundle",
+                "price_id": "price_bundle",
+            },
+        ],
+    ):
+        resp = list_admin_courses()
+    slugs = {c.course_slug for c in resp.courses}
+    assert "starter-bundle" in slugs
+    bundle = next(c for c in resp.courses if c.course_slug == "starter-bundle")
+    assert "week-zero-reset" in bundle.bundle_included_slugs
+
+
+def test_list_admin_audit_log_filters_action() -> None:
+    from app.admin_api import list_admin_audit_log
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_cur.__enter__ = MagicMock(return_value=mock_cur)
+    mock_cur.__exit__ = MagicMock(return_value=False)
+    mock_cur.fetchone.return_value = (0,)
+    mock_cur.fetchall.return_value = []
+
+    with patch("app.admin_api.SUPABASE_DB_URL", "postgres://test"), patch(
+        "app.db.db_connection", return_value=mock_conn
+    ), patch.object(mock_conn, "cursor", return_value=mock_cur):
+        list_admin_audit_log(limit=10, offset=0, action="ADMIN_LOGIN")
+
+    count_sql = mock_cur.execute.call_args_list[0][0][0]
+    assert "action = %s" in count_sql
+
+
+def test_list_admin_audit_log_rejects_unknown_action() -> None:
+    from app.admin_api import list_admin_audit_log
+
+    with pytest.raises(HTTPException) as exc:
+        list_admin_audit_log(limit=10, offset=0, action="HACK")
+    assert exc.value.status_code == 400
+
+
+def test_admin_courses_endpoint() -> None:
+    client = TestClient(app)
+    with patch("app.admin_api.verify_admin_token", return_value={"sub": "a", "type": "admin"}):
+        with patch(
+            "app.admin_api.list_admin_courses",
+            return_value=__import__("app.models", fromlist=["AdminCoursesResponse"]).AdminCoursesResponse(courses=[]),
+        ):
+            res = client.get("/admin/courses", headers={"Authorization": "Bearer x"})
+    assert res.status_code == 200
+
+
 def test_update_admin_role_validates_role() -> None:
     from app.admin_auth import update_admin_role
 

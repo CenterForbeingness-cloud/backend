@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ChatRequest(BaseModel):
@@ -340,16 +340,61 @@ class AdminStaffListResponse(BaseModel):
     staff: list[AdminStaffMember]
 
 
-class AdminUpdateRoleRequest(BaseModel):
-    role: str = Field(..., pattern="^(owner|editor|viewer)$")
+class AdminCourseItem(BaseModel):
+    course_slug: str
+    title: str
+    price_id: Optional[str] = None
+    is_published: bool = True
+    bundle_included_slugs: list[str] = Field(default_factory=list)
 
 
-class AdminUpdateRoleResponse(BaseModel):
+class AdminCoursesResponse(BaseModel):
+    courses: list[AdminCourseItem]
+
+
+class AdminCreateStaffRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=8, max_length=128)
+    role: str = Field(default="viewer", pattern="^(owner|editor|viewer)$")
+
+
+class AdminCreateStaffResponse(BaseModel):
     ok: bool
     admin_id: str
     email: str
     role: str
+    totp_secret: str
+    totp_provisioning_uri: str
+
+
+class AdminUpdateStaffRequest(BaseModel):
+    role: Optional[str] = Field(default=None, pattern="^(owner|editor|viewer)$")
+    is_active: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def require_at_least_one_field(self) -> "AdminUpdateStaffRequest":
+        if self.role is None and self.is_active is None:
+            raise ValueError("At least one of role or is_active is required")
+        return self
+
+
+class AdminUpdateStaffResponse(BaseModel):
+    ok: bool
+    admin_id: str
+    email: str
+    role: str
+    is_active: bool
     previous_role: str
+    previous_is_active: bool
+
+
+# Backward-compatible aliases
+class AdminUpdateRoleRequest(AdminUpdateStaffRequest):
+    pass
+
+
+class AdminUpdateRoleResponse(AdminUpdateStaffResponse):
+    pass
 
 
 def generate_session_id() -> str:
