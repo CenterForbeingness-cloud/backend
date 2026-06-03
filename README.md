@@ -63,14 +63,15 @@ Companion-first product direction:
 - `GET /profile` — thin companion memory (Phase 1)
 - `PATCH /profile` — update goals / focus
 
-**Admin (Phase 5, internal ops)** — see `docs/ADMIN_V1_SPEC.md`
+**Admin (internal ops)** — see `docs/ADMIN_IMPLEMENTATION_STATUS.md` and `docs/ADMIN_V1_SPEC.md`
 
-- `POST /admin/auth/login`, `POST /admin/auth/verify-totp`
-- `GET /admin/users?q=` — Bearer admin JWT
-- `POST /admin/entitlements/grant`, `POST /admin/entitlements/revoke` — owner/editor only
-- `GET /admin/audit-log`
-- `GET /admin/staff`, `PATCH /admin/staff/{admin_id}` — admin role changes (owner only)
-- `GET /admin/ui` — minimal web console (`backend/static/admin/index.html`)
+- Auth: `POST /admin/auth/login`, `POST /admin/auth/verify-totp`
+- Users: `GET /admin/users`, `GET /admin/users/{user_id}`, grant and revoke entitlements
+- Staff: `GET /admin/staff`, `POST /admin/staff`, `PATCH /admin/staff/{admin_id}` (owner for mutations)
+- Catalog: `GET /admin/courses` (read only)
+- Audit: `GET /admin/audit-log` with optional action filter and pagination
+- UI: `GET /admin/ui` (`backend/static/admin/index.html`)
+- CLI: `scripts/create_admin.py`. Optional `ADMIN_ALLOWED_IPS` in production
 
 `POST /sessions` accepts an optional `session_id` and returns the active session id.
 `GET /sessions/{session_id}/messages` returns recent messages for that session.
@@ -305,7 +306,7 @@ Stripe CLI and webhook testing guide:
 
 ### Deferred
 
-- Admin grant/revoke routes + UI → Phase 5 (`docs/ADMIN_V1_SPEC.md`); use Supabase for entitlements today
+- Admin console Phases 1–2 shipped; Phase 3 schedules and analytics summary not yet (`docs/ADMIN_IMPLEMENTATION_STATUS.md`)
 - Voice, advanced RAG, full DB course catalog (optional)
 
 ### Protected chat sequence (today)
