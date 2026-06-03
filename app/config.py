@@ -70,6 +70,8 @@ RATE_LIMIT_BILLING = os.getenv("RATE_LIMIT_BILLING", "15/minute")
 # Admin & 2FA
 ADMIN_2FA_ISSUER = os.getenv("ADMIN_2FA_ISSUER", "Sentient")
 ADMIN_2FA_WINDOW = int(os.getenv("ADMIN_2FA_WINDOW", "1"))  # TOTP time window tolerance
+# Comma-separated IPs allowed to hit /admin/* (empty = allow all, for local dev)
+ADMIN_ALLOWED_IPS_RAW = os.getenv("ADMIN_ALLOWED_IPS", "").strip()
 
 # Voice (MVP Launch) — POST /chat/voice
 VOICE_ENABLED = os.getenv("VOICE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}

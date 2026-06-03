@@ -53,6 +53,7 @@
       font-weight: 600;
     }
     button.secondary { background: #1a3a44; }
+    button.linkish { background: transparent; text-decoration: underline; min-width: 0; padding: 4px 0; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
     .row > * { flex: 1; min-width: 140px; }
@@ -68,7 +69,14 @@
     th { color: var(--accent2); font-weight: 600; }
     code { font-size: 0.8rem; word-break: break-all; }
     .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #1a3a44; font-size: 0.75rem; }
+    .pill.role-owner { background: #5a3d2e; color: #f4d4a8; }
+    .pill.role-editor { background: #2e4a3a; color: var(--accent2); }
+    .pill.role-viewer { background: #1a3a44; }
     .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+    #userDetail { margin-top: 16px; padding-top: 16px; border-top: 1px solid #1a3a44; }
+    .detail-grid { display: grid; gap: 12px; }
+    @media (min-width: 640px) { .detail-grid { grid-template-columns: 1fr 1fr; } }
+    h3 { margin: 0 0 8px; font-size: 0.95rem; color: var(--accent2); }
   </style>
 </head>
 <body>
@@ -117,11 +125,12 @@
           </div>
         </div>
         <div id="userResults"></div>
+        <div id="userDetail" class="hidden"></div>
       </section>
 
       <section id="tab-staff" class="card hidden">
         <h2 style="margin-top:0;font-size:1.1rem;">Admin account roles</h2>
-        <p class="sub" style="margin-top:0;">Only <strong>owner</strong> can change roles. Edit this page in <code>backend/static/admin/index.html</code>.</p>
+        <p class="sub" style="margin-top:0;">Only <strong>owner</strong> can change roles.</p>
         <div id="staffTable"></div>
       </section>
 
@@ -144,9 +153,12 @@
     const appView = $("appView");
     const totpBlock = $("totpBlock");
     let pendingEmail = "";
+    let me = { role: "viewer", email: "", admin_id: "" };
+    let selectedUserId = null;
 
     function token() { return localStorage.getItem(TOKEN_KEY) || ""; }
-    function adminRole() { return localStorage.getItem(ROLE_KEY) || "viewer"; }
+    function adminRole() { return me.role || localStorage.getItem(ROLE_KEY) || "viewer"; }
+    function canMutate() { return adminRole() === "owner" || adminRole() === "editor"; }
 
     function showMsg(el, text, ok) {
       el.innerHTML = text ? `<div class="msg ${ok ? "ok" : "err"}">${text}</div>` : "";
@@ -166,12 +178,35 @@
       return body;
     }
 
-    function showApp() {
+    function rolePill(role) {
+      return `<span class="pill role-${role}">${role}</span>`;
+    }
+
+    async function refreshMe() {
+      const data = await api("/admin/me");
+      me = { admin_id: data.admin_id, email: data.email, role: data.role };
+      localStorage.setItem(ROLE_KEY, me.role);
+      localStorage.setItem(EMAIL_KEY, me.email);
+    }
+
+    function updateWhoami() {
+      $("whoami").innerHTML = `${me.email || ""} ${rolePill(adminRole())}`;
+    }
+
+    async function showApp() {
       loginView.classList.add("hidden");
       appView.classList.remove("hidden");
-      $("whoami").textContent = `${localStorage.getItem(EMAIL_KEY) || ""} · role: ${adminRole()}`;
+      try {
+        await refreshMe();
+      } catch (_) {
+        showLogin();
+        return;
+      }
+      updateWhoami();
       if (adminRole() === "viewer") {
         document.querySelector('[data-tab="staff"]').classList.add("hidden");
+      } else {
+        document.querySelector('[data-tab="staff"]').classList.remove("hidden");
       }
     }
 
@@ -179,10 +214,13 @@
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(ROLE_KEY);
       localStorage.removeItem(EMAIL_KEY);
+      me = { role: "viewer", email: "", admin_id: "" };
       appView.classList.add("hidden");
       loginView.classList.remove("hidden");
       totpBlock.classList.add("hidden");
       pendingEmail = "";
+      selectedUserId = null;
+      $("userDetail").classList.add("hidden");
     }
 
     $("loginBtn").addEventListener("click", async () => {
@@ -201,8 +239,7 @@
           localStorage.setItem(TOKEN_KEY, data.admin_token);
           localStorage.setItem(ROLE_KEY, data.role);
           localStorage.setItem(EMAIL_KEY, data.admin_email);
-          showApp();
-          loadStaff();
+          await showApp();
           return;
         }
         await api("/admin/auth/login", {
@@ -240,42 +277,117 @@
     ];
 
     function renderUserRow(u) {
-      const opts = COURSES.map((c) => `<option value="${c}">${c}</option>`).join("");
       const owned = (u.owned_courses || []).map((c) => `<span class="pill">${c}</span>`).join(" ") || "—";
+      const actions = canMutate()
+        ? (() => {
+            const opts = COURSES.map((c) => `<option value="${c}">${c}</option>`).join("");
+            return `<select id="course-${u.user_id}">${opts}</select>
+              <button type="button" onclick="grantCourse('${u.user_id}')">Grant</button>
+              <button type="button" class="secondary" onclick="revokeCourse('${u.user_id}')">Revoke</button>`;
+          })()
+        : `<span class="sub">Read-only</span>`;
       return `<tr>
         <td><code>${u.user_id}</code><br/><small>${u.email || ""}</small></td>
         <td>${owned}<br/><small>${u.chat_plan} · ${u.messages_today} msgs today</small></td>
         <td>
-          <select id="course-${u.user_id}">${opts}</select>
-          <button type="button" onclick="grantCourse('${u.user_id}')">Grant</button>
-          <button type="button" class="secondary" onclick="revokeCourse('${u.user_id}')">Revoke</button>
+          <button type="button" class="linkish" onclick="viewUser('${u.user_id}')">View</button>
+          ${actions}
         </td>
       </tr>`;
     }
 
-    window.grantCourse = async (userId) => {
-      const sel = $("course-" + userId);
+    function fmtDt(v) {
+      if (!v) return "—";
+      try { return new Date(v).toLocaleString(); } catch (_) { return String(v); }
+    }
+
+    window.viewUser = async (userId) => {
+      selectedUserId = userId;
+      const box = $("userDetail");
+      box.classList.remove("hidden");
+      box.innerHTML = "<p class=\"sub\">Loading…</p>";
+      try {
+        const d = await api("/admin/users/" + encodeURIComponent(userId));
+        const active = (d.entitlements || []).filter((e) => !e.revoked_at);
+        const entHtml = active.length
+          ? active.map((e) => `<span class="pill">${e.course_slug}</span> <small>(${e.granted_by})</small>`).join("<br/>")
+          : "—";
+        const purchHtml = (d.purchases || []).length
+          ? `<table><tr><th>Course</th><th>When</th><th>Source</th></tr>
+            ${d.purchases.map((p) => `<tr>
+              <td>${p.course_slug}</td>
+              <td>${fmtDt(p.purchased_at)}${p.refunded_at ? " <span class=\"pill\">refunded</span>" : ""}</td>
+              <td><small>${p.purchase_source}</small></td>
+            </tr>`).join("")}</table>`
+          : "<p class=\"sub\">No purchases recorded.</p>";
+        const eventsHtml = (d.recent_events || []).length
+          ? `<ul style="margin:0;padding-left:1.2rem;font-size:0.85rem;">
+            ${d.recent_events.slice(0, 10).map((e) =>
+              `<li>${e.event_name} · ${fmtDt(e.created_at)}</li>`).join("")}
+          </ul>`
+          : "<p class=\"sub\">No recent events.</p>";
+        const profile = d.profile || {};
+        const mutate = canMutate()
+          ? `<div class="row" style="margin-top:12px;">
+              <select id="detailCourse">${COURSES.map((c) => `<option value="${c}">${c}</option>`).join("")}</select>
+              <button type="button" onclick="grantCourse('${userId}', true)">Grant</button>
+              <button type="button" class="secondary" onclick="revokeCourse('${userId}', true)">Revoke all for slug</button>
+            </div>`
+          : "";
+        box.innerHTML = `
+          <h2 style="margin:0 0 8px;font-size:1.05rem;">${d.email || userId}</h2>
+          <div class="detail-grid">
+            <div><h3>Profile</h3>
+              <p class="sub" style="margin:0;">${profile.display_name || "—"} · ${profile.primary_goal || "no goal"}</p>
+            </div>
+            <div><h3>Usage</h3>
+              <p class="sub" style="margin:0;">${d.chat_plan} · ${d.usage.messages_today}/${d.usage.limit} msgs</p>
+            </div>
+            <div><h3>Active entitlements</h3>${entHtml}</div>
+            <div><h3>Purchases</h3>${purchHtml}</div>
+          </div>
+          <h3 style="margin-top:16px;">Recent analytics</h3>${eventsHtml}
+          ${mutate}
+          <button type="button" class="linkish" onclick="closeUserDetail()">Close</button>`;
+      } catch (e) {
+        box.innerHTML = `<div class="msg err">${e.message}</div>`;
+      }
+    };
+
+    window.closeUserDetail = () => {
+      selectedUserId = null;
+      $("userDetail").classList.add("hidden");
+    };
+
+    window.grantCourse = async (userId, fromDetail) => {
+      const sel = fromDetail ? $("detailCourse") : $("course-" + userId);
+      const slug = sel?.value || COURSES[0];
+      if (!confirm(`Grant "${slug}" to this user?`)) return;
       try {
         const data = await api("/admin/entitlements/grant", {
           method: "POST",
-          body: JSON.stringify({ user_id: userId, course_slug: sel.value, note: "admin ui" }),
+          body: JSON.stringify({ user_id: userId, course_slug: slug, note: "admin ui" }),
         });
         showMsg($("appMsg"), "Granted: " + (data.granted_slugs || []).join(", "), true);
         $("searchUsersBtn").click();
+        if (selectedUserId === userId) viewUser(userId);
       } catch (e) {
         showMsg($("appMsg"), e.message, false);
       }
     };
 
-    window.revokeCourse = async (userId) => {
-      const sel = $("course-" + userId);
+    window.revokeCourse = async (userId, fromDetail) => {
+      const sel = fromDetail ? $("detailCourse") : $("course-" + userId);
+      const slug = sel?.value || COURSES[0];
+      if (!confirm(`Revoke "${slug}" (and bundle children if applicable)?`)) return;
       try {
         const data = await api("/admin/entitlements/revoke", {
           method: "POST",
-          body: JSON.stringify({ user_id: userId, course_slug: sel.value, reason: "admin ui" }),
+          body: JSON.stringify({ user_id: userId, course_slug: slug, reason: "admin ui" }),
         });
         showMsg($("appMsg"), "Revoked: " + (data.revoked_slugs || []).join(", "), true);
         $("searchUsersBtn").click();
+        if (selectedUserId === userId) viewUser(userId);
       } catch (e) {
         showMsg($("appMsg"), e.message, false);
       }
@@ -318,10 +430,10 @@
               <td>${s.email}<br/><code style="font-size:0.75rem">${s.admin_id}</code></td>
               <td>${canEdit
                 ? `<select id="role-${s.admin_id}">${roles}</select>`
-                : `<span class="pill">${s.role}</span>`}</td>
+                : rolePill(s.role)}</td>
               <td>${s.is_active ? "active" : "inactive"} · 2FA ${s.totp_enabled ? "on" : "off"}</td>
               <td>${canEdit
-                ? `<button type="button" onclick="saveRole('${s.admin_id}')">Save role</button>`
+                ? `<button type="button" onclick="saveRole('${s.admin_id}', '${s.email.replace(/'/g, "\\'")}')">Save role</button>`
                 : ""}</td>
             </tr>`;
           }).join("")}
@@ -331,8 +443,9 @@
       }
     }
 
-    window.saveRole = async (adminId) => {
+    window.saveRole = async (adminId, email) => {
       const role = $("role-" + adminId).value;
+      if (!confirm(`Change ${email} role to "${role}"?`)) return;
       try {
         const data = await api("/admin/staff/" + adminId, {
           method: "PATCH",
@@ -368,8 +481,8 @@
     (async () => {
       if (!token()) return;
       try {
-        await api("/admin/staff");
-        showApp();
+        await api("/admin/me");
+        await showApp();
       } catch (_) {
         showLogin();
       }
