@@ -63,6 +63,15 @@ Companion-first product direction:
 - `GET /profile` — thin companion memory (Phase 1)
 - `PATCH /profile` — update goals / focus
 
+**Admin (Phase 5, internal ops)** — see `docs/ADMIN_V1_SPEC.md`
+
+- `POST /admin/auth/login`, `POST /admin/auth/verify-totp`
+- `GET /admin/users?q=` — Bearer admin JWT
+- `POST /admin/entitlements/grant`, `POST /admin/entitlements/revoke` — owner/editor only
+- `GET /admin/audit-log`
+- `GET /admin/staff`, `PATCH /admin/staff/{admin_id}` — admin role changes (owner only)
+- `GET /admin/ui` — minimal web console (`backend/static/admin/index.html`)
+
 `POST /sessions` accepts an optional `session_id` and returns the active session id.
 `GET /sessions/{session_id}/messages` returns recent messages for that session.
 

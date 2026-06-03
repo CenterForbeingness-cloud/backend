@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sentient Admin</title>
+  <style>
+    :root {
+      --bg: #07151a;
+      --panel: #102733;
+      --accent: #2e6f77;
+      --accent2: #8dc9a8;
+      --text: #f4f1e8;
+      --muted: #eae5d8;
+      --err: #e8a598;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: linear-gradient(180deg, #102733, #07151a);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+    h1 { font-weight: 600; letter-spacing: 0.02em; margin: 0 0 8px; }
+    .sub { color: var(--muted); margin-bottom: 24px; font-size: 0.95rem; }
+    .card {
+      background: rgba(16, 39, 51, 0.85);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    label { display: block; font-size: 0.85rem; color: var(--accent2); margin-bottom: 4px; }
+    input, select, button, textarea {
+      font: inherit;
+      border-radius: 8px;
+      border: none;
+      padding: 10px 12px;
+      width: 100%;
+      margin-bottom: 12px;
+    }
+    input, select, textarea {
+      background: #0a1e28;
+      color: var(--text);
+    }
+    button {
+      background: var(--accent);
+      color: var(--text);
+      cursor: pointer;
+      width: auto;
+      min-width: 120px;
+      font-weight: 600;
+    }
+    button.secondary { background: #1a3a44; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+    .row > * { flex: 1; min-width: 140px; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+    .tabs button { flex: 0; margin: 0; }
+    .tabs button.active { background: var(--accent2); color: #07151a; }
+    .hidden { display: none !important; }
+    .msg { padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 0.9rem; }
+    .msg.err { background: rgba(232, 165, 152, 0.15); color: var(--err); }
+    .msg.ok { background: rgba(141, 201, 168, 0.15); color: var(--accent2); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #1a3a44; vertical-align: top; }
+    th { color: var(--accent2); font-weight: 600; }
+    code { font-size: 0.8rem; word-break: break-all; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #1a3a44; font-size: 0.75rem; }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="loginView">
+      <h1>Sentient Admin</h1>
+      <p class="sub">Internal ops only — not linked from the app.</p>
+      <div id="loginMsg"></div>
+      <div class="card">
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="username" />
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" />
+        <div id="totpBlock" class="hidden">
+          <label for="totp">Authenticator code (6 digits)</label>
+          <input id="totp" type="text" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" />
+        </div>
+        <button id="loginBtn" type="button">Sign in</button>
+      </div>
+    </div>
+
+    <div id="appView" class="hidden">
+      <div class="toolbar">
+        <div>
+          <h1>Sentient Admin</h1>
+          <p class="sub" id="whoami"></p>
+        </div>
+        <button type="button" class="secondary" id="logoutBtn">Sign out</button>
+      </div>
+      <div id="appMsg"></div>
+      <div class="tabs">
+        <button type="button" class="tab active" data-tab="users">App users</button>
+        <button type="button" class="tab" data-tab="staff">Admin roles</button>
+        <button type="button" class="tab" data-tab="audit">Audit log</button>
+      </div>
+
+      <section id="tab-users" class="card">
+        <h2 style="margin-top:0;font-size:1.1rem;">Find app users</h2>
+        <div class="row">
+          <div>
+            <label for="userQ">Email starts with</label>
+            <input id="userQ" type="text" placeholder="user@" />
+          </div>
+          <div style="flex:0;">
+            <button type="button" id="searchUsersBtn">Search</button>
+          </div>
+        </div>
+        <div id="userResults"></div>
+      </section>
+
+      <section id="tab-staff" class="card hidden">
+        <h2 style="margin-top:0;font-size:1.1rem;">Admin account roles</h2>
+        <p class="sub" style="margin-top:0;">Only <strong>owner</strong> can change roles. Edit this page in <code>backend/static/admin/index.html</code>.</p>
+        <div id="staffTable"></div>
+      </section>
+
+      <section id="tab-audit" class="card hidden">
+        <h2 style="margin-top:0;font-size:1.1rem;">Recent audit events</h2>
+        <button type="button" class="secondary" id="refreshAuditBtn">Refresh</button>
+        <div id="auditResults"></div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const TOKEN_KEY = "sentient_admin_token";
+    const ROLE_KEY = "sentient_admin_role";
+    const EMAIL_KEY = "sentient_admin_email";
+    const apiBase = window.location.origin;
+
+    const $ = (id) => document.getElementById(id);
+    const loginView = $("loginView");
+    const appView = $("appView");
+    const totpBlock = $("totpBlock");
+    let pendingEmail = "";
+
+    function token() { return localStorage.getItem(TOKEN_KEY) || ""; }
+    function adminRole() { return localStorage.getItem(ROLE_KEY) || "viewer"; }
+
+    function showMsg(el, text, ok) {
+      el.innerHTML = text ? `<div class="msg ${ok ? "ok" : "err"}">${text}</div>` : "";
+    }
+
+    async function api(path, options = {}) {
+      const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+      if (token()) headers.Authorization = "Bearer " + token();
+      const res = await fetch(apiBase + path, { ...options, headers });
+      let body = null;
+      try { body = await res.json(); } catch (_) {}
+      if (!res.ok) {
+        const detail = body?.detail;
+        const msg = typeof detail === "string" ? detail : JSON.stringify(detail || res.status);
+        throw new Error(msg);
+      }
+      return body;
+    }
+
+    function showApp() {
+      loginView.classList.add("hidden");
+      appView.classList.remove("hidden");
+      $("whoami").textContent = `${localStorage.getItem(EMAIL_KEY) || ""} · role: ${adminRole()}`;
+      if (adminRole() === "viewer") {
+        document.querySelector('[data-tab="staff"]').classList.add("hidden");
+      }
+    }
+
+    function showLogin() {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(ROLE_KEY);
+      localStorage.removeItem(EMAIL_KEY);
+      appView.classList.add("hidden");
+      loginView.classList.remove("hidden");
+      totpBlock.classList.add("hidden");
+      pendingEmail = "";
+    }
+
+    $("loginBtn").addEventListener("click", async () => {
+      const msg = $("loginMsg");
+      showMsg(msg, "", true);
+      const email = $("email").value.trim();
+      const password = $("password").value;
+      const totp = $("totp").value.trim();
+
+      try {
+        if (!totpBlock.classList.contains("hidden") && totp) {
+          const data = await api("/admin/auth/verify-totp", {
+            method: "POST",
+            body: JSON.stringify({ email: pendingEmail || email, totp_code: totp }),
+          });
+          localStorage.setItem(TOKEN_KEY, data.admin_token);
+          localStorage.setItem(ROLE_KEY, data.role);
+          localStorage.setItem(EMAIL_KEY, data.admin_email);
+          showApp();
+          loadStaff();
+          return;
+        }
+        await api("/admin/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ email, password }),
+        });
+        pendingEmail = email;
+        totpBlock.classList.remove("hidden");
+        showMsg(msg, "Enter your 6-digit authenticator code.", true);
+      } catch (e) {
+        showMsg(msg, e.message, false);
+      }
+    });
+
+    $("logoutBtn").addEventListener("click", showLogin);
+
+    document.querySelectorAll(".tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        ["users", "staff", "audit"].forEach((t) => {
+          $("tab-" + t).classList.toggle("hidden", btn.dataset.tab !== t);
+        });
+        if (btn.dataset.tab === "staff") loadStaff();
+        if (btn.dataset.tab === "audit") loadAudit();
+      });
+    });
+
+    const COURSES = [
+      "week-zero-reset",
+      "deep-calm-protocol",
+      "focus-discipline",
+      "mindful-foundations",
+      "starter-bundle",
+    ];
+
+    function renderUserRow(u) {
+      const opts = COURSES.map((c) => `<option value="${c}">${c}</option>`).join("");
+      const owned = (u.owned_courses || []).map((c) => `<span class="pill">${c}</span>`).join(" ") || "—";
+      return `<tr>
+        <td><code>${u.user_id}</code><br/><small>${u.email || ""}</small></td>
+        <td>${owned}<br/><small>${u.chat_plan} · ${u.messages_today} msgs today</small></td>
+        <td>
+          <select id="course-${u.user_id}">${opts}</select>
+          <button type="button" onclick="grantCourse('${u.user_id}')">Grant</button>
+          <button type="button" class="secondary" onclick="revokeCourse('${u.user_id}')">Revoke</button>
+        </td>
+      </tr>`;
+    }
+
+    window.grantCourse = async (userId) => {
+      const sel = $("course-" + userId);
+      try {
+        const data = await api("/admin/entitlements/grant", {
+          method: "POST",
+          body: JSON.stringify({ user_id: userId, course_slug: sel.value, note: "admin ui" }),
+        });
+        showMsg($("appMsg"), "Granted: " + (data.granted_slugs || []).join(", "), true);
+        $("searchUsersBtn").click();
+      } catch (e) {
+        showMsg($("appMsg"), e.message, false);
+      }
+    };
+
+    window.revokeCourse = async (userId) => {
+      const sel = $("course-" + userId);
+      try {
+        const data = await api("/admin/entitlements/revoke", {
+          method: "POST",
+          body: JSON.stringify({ user_id: userId, course_slug: sel.value, reason: "admin ui" }),
+        });
+        showMsg($("appMsg"), "Revoked: " + (data.revoked_slugs || []).join(", "), true);
+        $("searchUsersBtn").click();
+      } catch (e) {
+        showMsg($("appMsg"), e.message, false);
+      }
+    };
+
+    $("searchUsersBtn").addEventListener("click", async () => {
+      const q = $("userQ").value.trim();
+      const box = $("userResults");
+      if (!q) { box.innerHTML = "<p class=\"sub\">Type part of an email to search.</p>"; return; }
+      try {
+        const data = await api("/admin/users?q=" + encodeURIComponent(q) + "&limit=30");
+        const users = data.users || [];
+        if (!users.length) {
+          box.innerHTML = "<p class=\"sub\">No users found.</p>";
+          return;
+        }
+        box.innerHTML = `<table><thead><tr><th>User</th><th>Access</th><th>Actions</th></tr></thead><tbody>
+          ${users.map(renderUserRow).join("")}
+        </tbody></table>`;
+      } catch (e) {
+        box.innerHTML = `<div class="msg err">${e.message}</div>`;
+      }
+    });
+
+    async function loadStaff() {
+      const box = $("staffTable");
+      if (adminRole() === "viewer") {
+        box.innerHTML = "<p class=\"sub\">Viewers cannot manage admin accounts.</p>";
+        return;
+      }
+      try {
+        const data = await api("/admin/staff");
+        const staff = data.staff || [];
+        const canEdit = adminRole() === "owner";
+        box.innerHTML = `<table><thead><tr><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
+          ${staff.map((s) => {
+            const roles = ["owner", "editor", "viewer"].map((r) =>
+              `<option value="${r}" ${r === s.role ? "selected" : ""}>${r}</option>`).join("");
+            return `<tr>
+              <td>${s.email}<br/><code style="font-size:0.75rem">${s.admin_id}</code></td>
+              <td>${canEdit
+                ? `<select id="role-${s.admin_id}">${roles}</select>`
+                : `<span class="pill">${s.role}</span>`}</td>
+              <td>${s.is_active ? "active" : "inactive"} · 2FA ${s.totp_enabled ? "on" : "off"}</td>
+              <td>${canEdit
+                ? `<button type="button" onclick="saveRole('${s.admin_id}')">Save role</button>`
+                : ""}</td>
+            </tr>`;
+          }).join("")}
+        </tbody></table>`;
+      } catch (e) {
+        box.innerHTML = `<div class="msg err">${e.message}</div>`;
+      }
+    }
+
+    window.saveRole = async (adminId) => {
+      const role = $("role-" + adminId).value;
+      try {
+        const data = await api("/admin/staff/" + adminId, {
+          method: "PATCH",
+          body: JSON.stringify({ role }),
+        });
+        showMsg($("appMsg"), `Updated ${data.email}: ${data.previous_role} → ${data.role}`, true);
+        loadStaff();
+      } catch (e) {
+        showMsg($("appMsg"), e.message, false);
+      }
+    };
+
+    async function loadAudit() {
+      const box = $("auditResults");
+      try {
+        const data = await api("/admin/audit-log?limit=40");
+        const logs = data.logs || [];
+        box.innerHTML = `<table><thead><tr><th>When</th><th>Action</th><th>Resource</th><th>Details</th></tr></thead><tbody>
+          ${logs.map((l) => `<tr>
+            <td><small>${l.created_at}</small></td>
+            <td>${l.action}</td>
+            <td>${l.resource_type}<br/><code>${l.resource_id || ""}</code></td>
+            <td><code style="font-size:0.75rem">${JSON.stringify(l.details || {})}</code></td>
+          </tr>`).join("")}
+        </tbody></table>`;
+      } catch (e) {
+        box.innerHTML = `<div class="msg err">${e.message}</div>`;
+      }
+    }
+
+    $("refreshAuditBtn").addEventListener("click", loadAudit);
+
+    (async () => {
+      if (!token()) return;
+      try {
+        await api("/admin/staff");
+        showApp();
+      } catch (_) {
+        showLogin();
+      }
+    })();
+  </script>
+</body>
+</html>
