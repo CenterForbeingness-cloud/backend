@@ -19,6 +19,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.admin_auth import list_admin_staff, update_admin_role, verify_admin_token
 from app.config import FAIR_USE_LIMIT, SUPABASE_DB_URL, logger
+from app.user_profile import get_user_profile
 from app.daily_schedule import validate_course_slug
 from app.entitlements import (
     entitlement_grants_for_product,
@@ -28,15 +29,22 @@ from app.entitlements import (
     revoke_entitlement,
 )
 from app.models import (
+    AdminAnalyticsEventRow,
     AdminAuditLogEntry,
     AdminAuditLogResponse,
     AdminEntitlementMutationResponse,
+    AdminEntitlementRow,
     AdminGrantEntitlementRequest,
+    AdminMeResponse,
+    AdminPurchaseRow,
     AdminRevokeEntitlementRequest,
     AdminStaffListResponse,
     AdminStaffMember,
     AdminUpdateRoleRequest,
     AdminUpdateRoleResponse,
+    AdminUsageSnippet,
+    AdminUserDetailResponse,
+    AdminUserProfileSnippet,
     AdminUserSummary,
     AdminUsersResponse,
 )
@@ -253,6 +261,204 @@ def search_admin_users(*, query: str, limit: int) -> list[AdminUserSummary]:
     return summaries
 
 
+def _fetch_entitlement_rows(cur: Any, uid: str) -> list:
+    """Active/revoked entitlement rows (entitlements schema)."""
+    cur.execute(
+        """
+        SELECT
+            course_slug,
+            granted_at,
+            granted_by,
+            revoked_at,
+            revoked_by,
+            revoke_reason
+        FROM public.user_entitlements
+        WHERE user_id = %s
+        ORDER BY granted_at DESC NULLS LAST
+        """,
+        (uid,),
+    )
+    return cur.fetchall()
+
+
+def _fetch_purchase_rows(cur: Any, uid: str) -> list:
+    """Best-effort purchases: entitlements schema, then billing schema."""
+    try:
+        cur.execute(
+            """
+            SELECT
+                id,
+                course_slug,
+                purchase_source,
+                purchased_at,
+                refunded_at,
+                stripe_session_id,
+                stripe_payment_intent_id
+            FROM public.course_purchases
+            WHERE user_id = %s
+            ORDER BY purchased_at DESC NULLS LAST
+            LIMIT 50
+            """,
+            (uid,),
+        )
+        return cur.fetchall()
+    except Exception as exc:
+        logger.warning("admin purchases (entitlements cols) skipped: %s", exc)
+
+    try:
+        cur.execute(
+            """
+            SELECT
+                id,
+                course_slug,
+                provider,
+                COALESCE(purchased_at, created_at),
+                refunded_at,
+                provider_checkout_session_id,
+                provider_payment_intent_id
+            FROM public.course_purchases
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+            LIMIT 50
+            """,
+            (uid,),
+        )
+        return cur.fetchall()
+    except Exception as exc:
+        logger.warning("admin purchases (billing cols) skipped: %s", exc)
+        return []
+
+
+def _fetch_analytics_rows(cur: Any, uid: str) -> list:
+    """Recent analytics events; empty if table missing."""
+    try:
+        cur.execute(
+            """
+            SELECT event_name, created_at, properties
+            FROM public.analytics_events
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+            LIMIT 25
+            """,
+            (uid,),
+        )
+        return cur.fetchall()
+    except Exception as exc:
+        logger.warning("admin analytics skipped user=%s: %s", uid, exc)
+        return []
+
+
+def get_admin_user_detail(user_id: str) -> AdminUserDetailResponse:
+    """Load one app user for the admin detail panel."""
+    if not SUPABASE_DB_URL:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database not configured",
+        )
+
+    uid = _normalize_user_id(user_id)
+
+    try:
+        from app.db import db_connection
+
+        with db_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT email FROM auth.users WHERE id = %s",
+                (uid,),
+            )
+            user_row = cur.fetchone()
+            if user_row is None:
+                raise HTTPException(status_code=404, detail="User not found")
+            email = user_row[0]
+
+            try:
+                entitlement_rows = _fetch_entitlement_rows(cur, uid)
+            except Exception as exc:
+                logger.exception("get_admin_user_detail entitlements user=%s: %s", uid, exc)
+                raise HTTPException(
+                    status_code=502,
+                    detail="Entitlements read failed",
+                ) from exc
+
+            purchase_rows = _fetch_purchase_rows(cur, uid)
+            event_rows = _fetch_analytics_rows(cur, uid)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("get_admin_user_detail failed user=%s: %s", uid, exc)
+        raise HTTPException(status_code=502, detail="User detail read failed") from exc
+
+    profile = get_user_profile(uid)
+    profile_snippet: Optional[AdminUserProfileSnippet] = None
+    if profile:
+        profile_snippet = AdminUserProfileSnippet(
+            display_name=profile.display_name,
+            primary_goal=profile.primary_goal,
+            secondary_goal=profile.secondary_goal,
+            current_focus=profile.current_focus,
+            energy_level=profile.energy_level,
+            motivation_type=profile.motivation_type,
+            updated_at=profile.updated_at,
+        )
+
+    entitlements = [
+        AdminEntitlementRow(
+            course_slug=str(row[0]),
+            granted_at=row[1],
+            granted_by=str(row[2] or "unknown"),
+            revoked_at=row[3],
+            revoked_by=row[4],
+            revoke_reason=row[5],
+        )
+        for row in entitlement_rows
+    ]
+    purchases = [
+        AdminPurchaseRow(
+            id=int(row[0]),
+            course_slug=str(row[1]),
+            purchase_source=str(row[2] or "unknown"),
+            purchased_at=row[3],
+            refunded_at=row[4],
+            stripe_session_id=row[5],
+            stripe_payment_intent_id=row[6],
+        )
+        for row in purchase_rows
+    ]
+    recent_events: list[AdminAnalyticsEventRow] = []
+    for row in event_rows:
+        props = row[2]
+        if isinstance(props, str):
+            try:
+                props = json.loads(props)
+            except json.JSONDecodeError:
+                props = None
+        recent_events.append(
+            AdminAnalyticsEventRow(
+                event_name=str(row[0]),
+                created_at=row[1],
+                properties=props if isinstance(props, dict) else None,
+            )
+        )
+
+    usage_raw = get_usage_info(uid, FAIR_USE_LIMIT)
+    usage = AdminUsageSnippet(
+        messages_today=int(usage_raw.get("messages_today") or 0),
+        limit=int(usage_raw.get("limit") or FAIR_USE_LIMIT),
+        reset_at=usage_raw.get("reset_at"),
+    )
+
+    return AdminUserDetailResponse(
+        user_id=uid,
+        email=email,
+        profile=profile_snippet,
+        entitlements=entitlements,
+        purchases=purchases,
+        usage=usage,
+        chat_plan=resolve_chat_plan(uid),
+        recent_events=recent_events,
+    )
+
+
 def list_admin_audit_log(*, limit: int, offset: int) -> AdminAuditLogResponse:
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
@@ -306,6 +512,22 @@ def list_admin_audit_log(*, limit: int, offset: int) -> AdminAuditLogResponse:
             )
         )
     return AdminAuditLogResponse(logs=logs, total=total)
+
+
+@router.get("/health")
+def admin_health() -> dict:
+    """Ops probe — no auth, exempt from ADMIN_ALLOWED_IPS."""
+    return {"ok": True, "service": "admin"}
+
+
+@router.get("/me", response_model=AdminMeResponse)
+def admin_me(admin: dict = Depends(get_current_admin)) -> AdminMeResponse:
+    """Current admin identity (for UI permissions without decoding JWT)."""
+    return AdminMeResponse(
+        admin_id=str(admin.get("sub") or ""),
+        email=str(admin.get("email") or ""),
+        role=str(admin.get("admin_role") or "viewer"),
+    )
 
 
 @router.get("/ui")
@@ -366,6 +588,15 @@ def admin_update_staff_role(
         role=str(updated["role"]),
         previous_role=previous,
     )
+
+
+@router.get("/users/{user_id}", response_model=AdminUserDetailResponse)
+def admin_get_user(
+    user_id: str,
+    _admin: dict = Depends(get_current_admin),
+) -> AdminUserDetailResponse:
+    """One app user: profile, entitlements, purchases, usage, recent analytics."""
+    return get_admin_user_detail(user_id)
 
 
 @router.get("/users", response_model=AdminUsersResponse)

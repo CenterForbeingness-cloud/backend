@@ -1,16 +1,21 @@
 """Admin API helpers (minimal v1)."""
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
+from app.admin_access import enforce_admin_ip
 from app.admin_api import (
     admin_grant_entitlements,
     admin_revoke_entitlements,
+    get_admin_user_detail,
     get_current_admin,
 )
 from app.entitlements import entitlement_grants_for_product
+from app.main import app
 
 
 def test_entitlement_grants_for_bundle_expands_children() -> None:
@@ -53,6 +58,133 @@ def test_admin_revoke_calls_revoke_for_bundle_children() -> None:
         )
     assert set(revoked) == set(children)
     assert mock_revoke.call_count == len(children)
+
+
+def test_enforce_admin_ip_blocks_when_allowlist_set() -> None:
+    request = MagicMock()
+    request.url.path = "/admin/users"
+    request.headers = {}
+    request.client = MagicMock()
+    request.client.host = "203.0.113.9"
+
+    with patch("app.admin_access.admin_allowed_ips", return_value=frozenset({"203.0.113.1"})):
+        with pytest.raises(HTTPException) as exc:
+            enforce_admin_ip(request)
+    assert exc.value.status_code == 403
+
+
+def test_enforce_admin_ip_allows_health_probe() -> None:
+    request = MagicMock()
+    request.url.path = "/admin/health"
+    request.headers = {}
+    request.client = MagicMock()
+    request.client.host = "203.0.113.9"
+
+    with patch("app.admin_access.admin_allowed_ips", return_value=frozenset({"203.0.113.1"})):
+        enforce_admin_ip(request)
+
+
+def test_admin_me_shape() -> None:
+    from app.admin_api import admin_me
+
+    payload = {
+        "sub": "00000000-0000-0000-0000-000000000001",
+        "email": "ops@example.com",
+        "admin_role": "editor",
+    }
+    resp = admin_me(payload)
+    assert resp.admin_id == payload["sub"]
+    assert resp.email == "ops@example.com"
+    assert resp.role == "editor"
+
+
+def test_admin_health_unauthenticated() -> None:
+    client = TestClient(app)
+    res = client.get("/admin/health")
+    assert res.status_code == 200
+    assert res.json() == {"ok": True, "service": "admin"}
+
+
+def test_admin_me_requires_bearer() -> None:
+    client = TestClient(app)
+    res = client.get("/admin/me")
+    assert res.status_code == 403
+
+
+def test_admin_user_detail_invalid_uuid() -> None:
+    client = TestClient(app)
+    with patch("app.admin_api.verify_admin_token", return_value={"sub": "a", "email": "a@b.c", "admin_role": "viewer", "type": "admin"}):
+        res = client.get(
+            "/admin/users/not-a-uuid",
+            headers={"Authorization": "Bearer fake"},
+        )
+    assert res.status_code == 400
+
+
+def test_get_admin_user_detail_not_found() -> None:
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_cur.__enter__ = MagicMock(return_value=mock_cur)
+    mock_cur.__exit__ = MagicMock(return_value=False)
+    mock_cur.fetchone.return_value = None
+
+    with patch("app.admin_api.SUPABASE_DB_URL", "postgres://test"), patch(
+        "app.db.db_connection", return_value=mock_conn
+    ), patch.object(mock_conn, "cursor", return_value=mock_cur):
+        with pytest.raises(HTTPException) as exc:
+            get_admin_user_detail("00000000-0000-0000-0000-000000000099")
+    assert exc.value.status_code == 404
+
+
+def test_get_admin_user_detail_skips_missing_analytics() -> None:
+    uid = "00000000-0000-0000-0000-000000000001"
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_cur.__enter__ = MagicMock(return_value=mock_cur)
+    mock_cur.__exit__ = MagicMock(return_value=False)
+
+    def execute_side_effect(sql, params=None):
+        if "auth.users" in sql:
+            mock_cur.fetchone.return_value = ("user@example.com",)
+        elif "user_entitlements" in sql:
+            mock_cur.fetchall.return_value = [
+                ("week-zero-reset", datetime.now(timezone.utc), "stripe", None, None, None),
+            ]
+        elif "course_purchases" in sql and "purchase_source" in sql:
+            mock_cur.fetchall.return_value = []
+        elif "analytics_events" in sql:
+            raise Exception('relation "analytics_events" does not exist')
+
+    mock_cur.execute.side_effect = execute_side_effect
+
+    with patch("app.admin_api.SUPABASE_DB_URL", "postgres://test"), patch(
+        "app.db.db_connection", return_value=mock_conn
+    ), patch.object(mock_conn, "cursor", return_value=mock_cur), patch(
+        "app.admin_api.get_user_profile", return_value=None
+    ), patch(
+        "app.admin_api.get_usage_info",
+        return_value={"messages_today": 0, "limit": 100, "reset_at": None},
+    ), patch("app.admin_api.resolve_chat_plan", return_value="free"):
+        detail = get_admin_user_detail(uid)
+
+    assert detail.email == "user@example.com"
+    assert detail.recent_events == []
+    assert len(detail.entitlements) == 1
+
+
+def test_admin_ip_middleware_blocks_when_configured() -> None:
+    client = TestClient(app)
+    with patch.dict("os.environ", {"ADMIN_ALLOWED_IPS": "198.51.100.1"}, clear=False):
+        res = client.get("/admin/health")
+    assert res.status_code == 200
+    with patch.dict("os.environ", {"ADMIN_ALLOWED_IPS": "198.51.100.1"}, clear=False):
+        res = client.get("/admin/me", headers={"Authorization": "Bearer x"})
+    assert res.status_code == 403
+    assert res.json()["detail"] == "Admin access restricted by IP"
 
 
 def test_update_admin_role_validates_role() -> None:

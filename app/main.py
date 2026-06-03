@@ -21,7 +21,13 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    Response,
+    StreamingResponse,
+)
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -104,6 +110,7 @@ from app.user_profile import (
     profile_has_launch_memory,
     upsert_user_profile,
 )
+from app.admin_access import enforce_admin_ip, is_admin_path
 from app.admin_api import router as admin_router, write_admin_audit_log
 from app.admin_auth import admin_login, verify_totp as verify_admin_totp
 from app.rate_limit import AUTH_LIMIT, BILLING_LIMIT, CHAT_LIMIT, SESSIONS_LIMIT, limiter
@@ -129,6 +136,21 @@ app.add_middleware(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
+
+
+@app.middleware("http")
+async def admin_ip_guard(request: Request, call_next):
+    """A7: reject /admin/* when ADMIN_ALLOWED_IPS is set (except /admin/health)."""
+    if is_admin_path(request.url.path):
+        try:
+            enforce_admin_ip(request)
+        except HTTPException as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+            )
+    return await call_next(request)
+
 
 app.include_router(admin_router)
 

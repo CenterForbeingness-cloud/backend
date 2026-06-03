@@ -254,6 +254,64 @@ class AdminUsersResponse(BaseModel):
     users: list[AdminUserSummary]
 
 
+class AdminMeResponse(BaseModel):
+    admin_id: str
+    email: str
+    role: str
+
+
+class AdminUserProfileSnippet(BaseModel):
+    display_name: Optional[str] = None
+    primary_goal: Optional[str] = None
+    secondary_goal: Optional[str] = None
+    current_focus: Optional[str] = None
+    energy_level: Optional[str] = None
+    motivation_type: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+
+class AdminEntitlementRow(BaseModel):
+    course_slug: str
+    granted_at: Optional[datetime] = None
+    granted_by: str = "unknown"
+    revoked_at: Optional[datetime] = None
+    revoked_by: Optional[str] = None
+    revoke_reason: Optional[str] = None
+
+
+class AdminPurchaseRow(BaseModel):
+    id: int
+    course_slug: str
+    purchase_source: str
+    purchased_at: datetime
+    refunded_at: Optional[datetime] = None
+    stripe_session_id: Optional[str] = None
+    stripe_payment_intent_id: Optional[str] = None
+
+
+class AdminAnalyticsEventRow(BaseModel):
+    event_name: str
+    created_at: datetime
+    properties: Optional[dict] = None
+
+
+class AdminUsageSnippet(BaseModel):
+    messages_today: int = 0
+    limit: int = 0
+    reset_at: Optional[datetime] = None
+
+
+class AdminUserDetailResponse(BaseModel):
+    user_id: str
+    email: Optional[str] = None
+    profile: Optional[AdminUserProfileSnippet] = None
+    entitlements: list[AdminEntitlementRow] = Field(default_factory=list)
+    purchases: list[AdminPurchaseRow] = Field(default_factory=list)
+    usage: AdminUsageSnippet
+    chat_plan: str = "free"
+    recent_events: list[AdminAnalyticsEventRow] = Field(default_factory=list)
+
+
 class AdminAuditLogEntry(BaseModel):
     id: int
     admin_id: str
