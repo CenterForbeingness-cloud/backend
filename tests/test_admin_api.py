@@ -236,6 +236,80 @@ def test_list_admin_audit_log_rejects_unknown_action() -> None:
     assert exc.value.status_code == 400
 
 
+def test_admin_analytics_summary_rag_miss_rate() -> None:
+    from app.admin_ops import get_admin_analytics_summary
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_cur.__enter__ = MagicMock(return_value=mock_cur)
+    mock_cur.__exit__ = MagicMock(return_value=False)
+
+    def table_side_effect(sql, params=None):
+        sql_l = sql.lower()
+        if "information_schema.tables" in sql_l:
+            mock_cur.fetchone.return_value = (1,)
+        elif "auth.users limit" in sql_l:
+            pass
+        elif "group by event_name" in sql_l:
+            mock_cur.fetchall.return_value = [
+                ("rag_retrieval", 8),
+                ("rag_retrieval_miss", 2),
+                ("purchase_completed", 1),
+            ]
+        elif "count(*) from auth.users" in sql_l:
+            mock_cur.fetchone.return_value = (3,)
+        elif "from public.user_profile" in sql_l and "updated_at" in sql_l:
+            mock_cur.fetchone.return_value = (2,)
+        elif "from public.user_profile" in sql_l:
+            mock_cur.fetchone.return_value = (5,)
+        elif "from public.chat_messages" in sql_l:
+            mock_cur.fetchone.return_value = (40,)
+        elif "from public.user_message_counts" in sql_l:
+            mock_cur.fetchall.return_value = []
+        elif "voice_seconds_today" in sql_l:
+            mock_cur.fetchone.return_value = (0,)
+        elif "voice_session_end" in sql_l:
+            mock_cur.fetchone.return_value = (120.5,)
+        else:
+            mock_cur.fetchone.return_value = (0,)
+            mock_cur.fetchall.return_value = []
+
+    mock_cur.execute.side_effect = table_side_effect
+
+    with patch("app.admin_ops.SUPABASE_DB_URL", "postgres://test"), patch(
+        "app.db.db_connection", return_value=mock_conn
+    ), patch.object(mock_conn, "cursor", return_value=mock_cur):
+        summary = get_admin_analytics_summary(days=7)
+
+    assert summary.rag_health.hits == 8
+    assert summary.rag_health.misses == 2
+    assert summary.rag_health.miss_rate_pct == 20.0
+    assert summary.purchases_completed == 1
+
+
+def test_admin_schedule_health_endpoint() -> None:
+    client = TestClient(app)
+    with patch("app.admin_api.verify_admin_token", return_value={"sub": "a", "type": "admin"}):
+        with patch(
+            "app.admin_api.get_admin_schedule_health",
+            return_value=__import__(
+                "app.models", fromlist=["AdminScheduleHealthResponse"]
+            ).AdminScheduleHealthResponse(
+                course_slug="mindful-foundations",
+                day_count=1,
+                days=[],
+            ),
+        ):
+            res = client.get(
+                "/admin/schedules/mindful-foundations",
+                headers={"Authorization": "Bearer x"},
+            )
+    assert res.status_code == 200
+    assert res.json()["course_slug"] == "mindful-foundations"
+
+
 def test_admin_courses_endpoint() -> None:
     client = TestClient(app)
     with patch("app.admin_api.verify_admin_token", return_value={"sub": "a", "type": "admin"}):
