@@ -472,6 +472,13 @@ class AdminUpdateStaffResponse(BaseModel):
     previous_is_active: bool
 
 
+class AdminDeleteStaffResponse(BaseModel):
+    ok: bool
+    admin_id: str
+    email: str
+    role: str
+
+
 # Backward-compatible aliases
 class AdminUpdateRoleRequest(AdminUpdateStaffRequest):
     pass

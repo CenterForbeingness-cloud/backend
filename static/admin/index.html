@@ -66,6 +66,7 @@
       font-weight: 600;
     }
     button.secondary { background: #1a3a44; }
+    button.danger { background: #5c1a1a; }
     button.linkish { background: transparent; text-decoration: underline; min-width: 0; padding: 4px 0; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
@@ -224,6 +225,7 @@
               <option value="ADMIN_USER_CREATE">ADMIN_USER_CREATE</option>
               <option value="ADMIN_USER_DEACTIVATE">ADMIN_USER_DEACTIVATE</option>
               <option value="ADMIN_USER_ACTIVATE">ADMIN_USER_ACTIVATE</option>
+              <option value="ADMIN_USER_DELETE">ADMIN_USER_DELETE</option>
             </select>
           </div>
           <div style="flex:0;display:flex;gap:8px;align-items:flex-end;">
@@ -647,7 +649,8 @@
               <td>${s.is_active ? "active" : "inactive"} · ${s.totp_enabled ? "2FA on" : "<span class=\"pill\">pending setup</span>"}</td>
               <td>${canEdit ? `
                 <button type="button" onclick="saveRole('${s.admin_id}', '${s.email.replace(/'/g, "\\'")}')">Save role</button>
-                ${self ? "" : `<button type="button" class="secondary" onclick="toggleActive('${s.admin_id}', '${s.email.replace(/'/g, "\\'")}', ${!s.is_active})">${s.is_active ? "Deactivate" : "Activate"}</button>`}
+                ${self ? "" : `<button type="button" class="secondary" onclick="toggleActive('${s.admin_id}', '${s.email.replace(/'/g, "\\'")}', ${!s.is_active})">${s.is_active ? "Deactivate" : "Activate"}</button>
+                <button type="button" class="danger" onclick="deleteAdmin('${s.admin_id}', '${s.email.replace(/'/g, "\\'")}')">Delete</button>`}
               ` : ""}</td>
             </tr>`;
           }).join("")}
@@ -705,6 +708,17 @@
           body: JSON.stringify({ is_active: activate }),
         });
         showMsg($("appMsg"), `${data.email} is now ${data.is_active ? "active" : "inactive"}.`, true);
+        loadStaff();
+      } catch (e) {
+        showMsg($("appMsg"), e.message, false);
+      }
+    };
+
+    window.deleteAdmin = async (adminId, email) => {
+      if (!confirm(`Permanently delete ${email}? This cannot be undone.`)) return;
+      try {
+        const data = await api("/admin/staff/" + adminId, { method: "DELETE" });
+        showMsg($("appMsg"), `Deleted ${data.email} (${data.role}).`, true);
         loadStaff();
       } catch (e) {
         showMsg($("appMsg"), e.message, false);

@@ -342,3 +342,46 @@ def test_update_admin_role_validates_role() -> None:
         )
     assert updated is None
     assert error is not None
+
+
+def test_delete_admin_user_rejects_invalid_id() -> None:
+    from app.admin_auth import delete_admin_user
+
+    deleted, error = delete_admin_user("not-a-uuid")
+    assert deleted is None
+    assert error == "Invalid admin_id"
+
+
+def test_delete_admin_user_blocks_last_owner() -> None:
+    from app.admin_auth import delete_admin_user
+
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.side_effect = [
+        ("owner@example.com", "owner", True, True),
+        (0,),
+    ]
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+    mock_cm = MagicMock()
+    mock_cm.__enter__.return_value = mock_conn
+
+    with patch("app.admin_auth._get_db_connection", return_value=mock_cm):
+        deleted, error = delete_admin_user("00000000-0000-0000-0000-000000000001")
+
+    assert deleted is None
+    assert error == "Cannot delete the last owner account"
+
+
+def test_admin_delete_staff_endpoint_blocks_self() -> None:
+    client = TestClient(app)
+    admin_id = "00000000-0000-0000-0000-0000000000aa"
+    with patch(
+        "app.admin_api.verify_admin_token",
+        return_value={"sub": admin_id, "type": "admin", "admin_role": "owner"},
+    ):
+        res = client.delete(
+            f"/admin/staff/{admin_id}",
+            headers={"Authorization": "Bearer x"},
+        )
+    assert res.status_code == 400
+    assert "own account" in res.json()["detail"].lower()
