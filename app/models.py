@@ -352,6 +352,59 @@ class AdminCoursesResponse(BaseModel):
     courses: list[AdminCourseItem]
 
 
+class AdminEventCount(BaseModel):
+    event_name: str
+    count: int
+
+
+class AdminRagHealthSnippet(BaseModel):
+    hits: int = 0
+    misses: int = 0
+    miss_rate_pct: float = 0.0
+
+
+class AdminVoiceHealthSnippet(BaseModel):
+    voice_sessions: int = 0
+    spoken_seconds_total: float = 0.0
+    users_near_voice_cap: int = 0
+
+
+class AdminQuotaPressureUser(BaseModel):
+    user_id: str
+    email: Optional[str] = None
+    messages_today: int = 0
+    limit: int = 0
+    pct_used: float = 0.0
+
+
+class AdminAnalyticsSummaryResponse(BaseModel):
+    period_days: int
+    generated_at: datetime
+    new_users: int = 0
+    profiles_with_goals_period: int = 0
+    profiles_with_goals_total: int = 0
+    event_counts: list[AdminEventCount] = Field(default_factory=list)
+    rag_health: AdminRagHealthSnippet = Field(default_factory=AdminRagHealthSnippet)
+    voice_health: AdminVoiceHealthSnippet = Field(default_factory=AdminVoiceHealthSnippet)
+    purchases_completed: int = 0
+    chat_messages_period: int = 0
+    quota_pressure: list[AdminQuotaPressureUser] = Field(default_factory=list)
+    fair_use_limit: int = 0
+    tables_available: dict[str, bool] = Field(default_factory=dict)
+
+
+class AdminScheduleDayRow(BaseModel):
+    day_number: int
+    day_title: Optional[str] = None
+    content_preview: str = ""
+
+
+class AdminScheduleHealthResponse(BaseModel):
+    course_slug: str
+    day_count: int
+    days: list[AdminScheduleDayRow] = Field(default_factory=list)
+
+
 class AdminCreateStaffRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=255)
     password: str = Field(..., min_length=8, max_length=128)

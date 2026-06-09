@@ -22,7 +22,20 @@
       color: var(--text);
       min-height: 100vh;
     }
-    .wrap { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 24px 16px 48px; }
+    .stat-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      margin-bottom: 16px;
+    }
+    .stat {
+      background: #0a1e28;
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .stat .val { font-size: 1.4rem; font-weight: 700; color: var(--accent2); }
+    .stat .lbl { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
     h1 { font-weight: 600; letter-spacing: 0.02em; margin: 0 0 8px; }
     .sub { color: var(--muted); margin-bottom: 24px; font-size: 0.95rem; }
     .card {
@@ -108,13 +121,48 @@
       </div>
       <div id="appMsg"></div>
       <div class="tabs">
-        <button type="button" class="tab active" data-tab="users">App users</button>
+        <button type="button" class="tab active" data-tab="ops">Ops & AI</button>
+        <button type="button" class="tab" data-tab="users">App users</button>
         <button type="button" class="tab" data-tab="courses">Courses</button>
         <button type="button" class="tab" data-tab="staff">Admin roles</button>
         <button type="button" class="tab" data-tab="audit">Audit log</button>
       </div>
 
-      <section id="tab-users" class="card">
+      <section id="tab-ops" class="card">
+        <h2 style="margin-top:0;font-size:1.1rem;">Ops &amp; AI monitoring</h2>
+        <p class="sub" style="margin-top:0;">Usage pressure, RAG health, and event rollups from <code>GET /admin/analytics/summary</code>.</p>
+        <div class="row">
+          <div style="max-width:120px;">
+            <label for="opsDays">Days</label>
+            <select id="opsDays">
+              <option value="7" selected>7</option>
+              <option value="14">14</option>
+              <option value="30">30</option>
+            </select>
+          </div>
+          <div style="flex:0;">
+            <button type="button" class="secondary" id="refreshOpsBtn">Refresh</button>
+          </div>
+        </div>
+        <div id="opsStats" class="stat-grid"></div>
+        <h3>Users near message quota (≥80%)</h3>
+        <div id="opsQuota"></div>
+        <h3 style="margin-top:20px;">Event counts</h3>
+        <div id="opsEvents"></div>
+        <h3 style="margin-top:20px;">Schedule health</h3>
+        <div class="row">
+          <div>
+            <label for="scheduleSlug">Course slug</label>
+            <input id="scheduleSlug" type="text" placeholder="mindful-foundations" />
+          </div>
+          <div style="flex:0;">
+            <button type="button" class="secondary" id="checkScheduleBtn">Check days</button>
+          </div>
+        </div>
+        <div id="opsSchedule"></div>
+      </section>
+
+      <section id="tab-users" class="card hidden">
         <h2 style="margin-top:0;font-size:1.1rem;">Find app users</h2>
         <div class="row">
           <div>
@@ -307,9 +355,10 @@
       btn.addEventListener("click", () => {
         document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
-        ["users", "courses", "staff", "audit"].forEach((t) => {
+        ["ops", "users", "courses", "staff", "audit"].forEach((t) => {
           $("tab-" + t).classList.toggle("hidden", btn.dataset.tab !== t);
         });
+        if (btn.dataset.tab === "ops") loadOpsSummary();
         if (btn.dataset.tab === "courses") loadCoursesTab();
         if (btn.dataset.tab === "staff") loadStaff();
         if (btn.dataset.tab === "audit") { auditOffset = 0; loadAudit(); }
@@ -607,6 +656,80 @@
       }
     }
 
+    function statCard(val, label) {
+      return `<div class="stat"><div class="val">${val}</div><div class="lbl">${label}</div></div>`;
+    }
+
+    async function loadOpsSummary() {
+      const days = $("opsDays")?.value || "7";
+      const stats = $("opsStats");
+      const quota = $("opsQuota");
+      const events = $("opsEvents");
+      stats.innerHTML = "<p class=\"sub\">Loading…</p>";
+      try {
+        const d = await api("/admin/analytics/summary?days=" + encodeURIComponent(days));
+        const rag = d.rag_health || {};
+        const voice = d.voice_health || {};
+        stats.innerHTML = [
+          statCard(d.new_users ?? 0, "New users"),
+          statCard(d.profiles_with_goals_total ?? 0, "Profiles w/ goals"),
+          statCard(d.chat_messages_period ?? 0, "Chat msgs (DB)"),
+          statCard(d.purchases_completed ?? 0, "Purchases"),
+          statCard(`${rag.miss_rate_pct ?? 0}%`, "RAG miss rate"),
+          statCard(voice.voice_sessions ?? 0, "Voice sessions"),
+          statCard(Math.round(voice.spoken_seconds_total ?? 0), "Spoken sec"),
+          statCard((d.quota_pressure || []).length, "Near msg cap"),
+        ].join("");
+        const qp = d.quota_pressure || [];
+        quota.innerHTML = qp.length
+          ? `<table><thead><tr><th>User</th><th>Usage</th></tr></thead><tbody>
+            ${qp.map((u) => `<tr>
+              <td><code>${u.user_id}</code><br/><small>${u.email || ""}</small></td>
+              <td>${u.messages_today}/${u.limit} (${u.pct_used}%)</td>
+            </tr>`).join("")}
+          </tbody></table>`
+          : `<p class="sub">No users at ≥80% of ${d.fair_use_limit || "—"} msg limit in active period.</p>`;
+        const ev = d.event_counts || [];
+        events.innerHTML = ev.length
+          ? `<table><thead><tr><th>Event</th><th>Count</th></tr></thead><tbody>
+            ${ev.map((e) => `<tr><td>${e.event_name}</td><td>${e.count}</td></tr>`).join("")}
+          </tbody></table>`
+          : "<p class=\"sub\">No analytics events in this window (run app + ensure analytics_events table exists).</p>";
+      } catch (e) {
+        stats.innerHTML = `<div class="msg err">${e.message}</div>`;
+        quota.innerHTML = "";
+        events.innerHTML = "";
+      }
+    }
+
+    async function loadScheduleHealth() {
+      const slug = ($("scheduleSlug")?.value || "").trim();
+      const box = $("opsSchedule");
+      if (!slug) { box.innerHTML = "<p class=\"sub\">Enter a course slug.</p>"; return; }
+      box.innerHTML = "<p class=\"sub\">Loading…</p>";
+      try {
+        const d = await api("/admin/schedules/" + encodeURIComponent(slug));
+        if (!d.days?.length) {
+          box.innerHTML = `<p class="sub">No schedule rows for <code>${d.course_slug}</code>. Run import script.</p>`;
+          return;
+        }
+        box.innerHTML = `<p class="sub">${d.day_count} day(s) imported for <code>${d.course_slug}</code></p>
+          <table><thead><tr><th>Day</th><th>Title</th><th>Preview</th></tr></thead><tbody>
+          ${d.days.map((day) => `<tr>
+            <td>${day.day_number}</td>
+            <td>${day.day_title || "—"}</td>
+            <td><small>${day.content_preview}</small></td>
+          </tr>`).join("")}
+          </tbody></table>`;
+      } catch (e) {
+        box.innerHTML = `<div class="msg err">${e.message}</div>`;
+      }
+    }
+
+    $("refreshOpsBtn")?.addEventListener("click", loadOpsSummary);
+    $("opsDays")?.addEventListener("change", loadOpsSummary);
+    $("checkScheduleBtn")?.addEventListener("click", loadScheduleHealth);
+
     $("refreshAuditBtn").addEventListener("click", () => { auditOffset = 0; loadAudit(); });
     $("auditAction")?.addEventListener("change", () => { auditOffset = 0; loadAudit(); });
     $("auditPrevBtn").addEventListener("click", () => {
@@ -623,6 +746,7 @@
       try {
         await api("/admin/me");
         await showApp();
+        loadOpsSummary();
       } catch (_) {
         showLogin();
       }

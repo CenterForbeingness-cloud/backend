@@ -37,8 +37,10 @@ from app.entitlements import (
     resolve_chat_plan,
     revoke_entitlement,
 )
+from app.admin_ops import get_admin_analytics_summary, get_admin_schedule_health
 from app.models import (
     AdminAnalyticsEventRow,
+    AdminAnalyticsSummaryResponse,
     AdminAuditLogEntry,
     AdminAuditLogResponse,
     AdminCourseItem,
@@ -51,6 +53,7 @@ from app.models import (
     AdminMeResponse,
     AdminPurchaseRow,
     AdminRevokeEntitlementRequest,
+    AdminScheduleHealthResponse,
     AdminStaffListResponse,
     AdminStaffMember,
     AdminUpdateStaffRequest,
@@ -850,3 +853,47 @@ def admin_audit_log_endpoint(
 ) -> AdminAuditLogResponse:
     """A5: Paginated admin audit log with optional action filter."""
     return list_admin_audit_log(limit=limit, offset=offset, action=action)
+
+
+@router.get("/analytics/summary", response_model=AdminAnalyticsSummaryResponse)
+def admin_analytics_summary_endpoint(
+    days: int = 7,
+    _admin: dict = Depends(get_current_admin),
+) -> AdminAnalyticsSummaryResponse:
+    """Phase 3: product + AI ops rollup (events, RAG, quota pressure)."""
+    try:
+        return get_admin_analytics_summary(days=days)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        logger.exception("admin analytics summary failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Analytics summary read failed",
+        ) from exc
+
+
+@router.get("/schedules/{course_slug}", response_model=AdminScheduleHealthResponse)
+def admin_schedule_health_endpoint(
+    course_slug: str,
+    _admin: dict = Depends(get_current_admin),
+) -> AdminScheduleHealthResponse:
+    """Phase 3: verify daily schedule rows imported for a course."""
+    try:
+        return get_admin_schedule_health(course_slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        logger.exception("admin schedule health failed slug=%s: %s", course_slug, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Schedule health read failed",
+        ) from exc
