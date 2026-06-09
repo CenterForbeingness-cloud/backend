@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.admin_auth import (
+    delete_admin_user,
     list_admin_staff,
     update_admin_staff,
     verify_admin_token,
@@ -55,6 +56,7 @@ from app.models import (
     AdminScheduleHealthResponse,
     AdminStaffListResponse,
     AdminStaffMember,
+    AdminDeleteStaffResponse,
     AdminUpdateStaffRequest,
     AdminUpdateStaffResponse,
     AdminUsageSnippet,
@@ -82,6 +84,7 @@ _AUDIT_FILTER_ACTIONS = frozenset({
     "ADMIN_USER_CREATE",
     "ADMIN_USER_DEACTIVATE",
     "ADMIN_USER_ACTIVATE",
+    "ADMIN_USER_DELETE",
 })
 
 
@@ -750,6 +753,45 @@ def admin_update_staff_member(
         is_active=bool(updated["is_active"]),
         previous_role=previous_role,
         previous_is_active=previous_active,
+    )
+
+
+@router.delete("/staff/{admin_id}", response_model=AdminDeleteStaffResponse)
+def admin_delete_staff_member(
+    admin_id: str,
+    request: Request,
+    admin: dict = Depends(get_current_admin),
+) -> AdminDeleteStaffResponse:
+    """Permanently remove an admin account (owner only)."""
+    _require_owner_role(admin)
+
+    if str(admin.get("sub")) == admin_id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+
+    deleted, error = delete_admin_user(admin_id)
+    if error or not deleted:
+        raise HTTPException(status_code=400, detail=error or "Delete failed")
+
+    write_admin_audit_log(
+        admin_id=str(admin["sub"]),
+        action="ADMIN_USER_DELETE",
+        resource_type="admin",
+        resource_id=str(deleted["admin_id"]),
+        details={
+            "email": deleted["email"],
+            "role": deleted["role"],
+            "is_active": deleted["is_active"],
+            "totp_enabled": deleted["totp_enabled"],
+        },
+        request=request,
+        http_status_code=200,
+    )
+
+    return AdminDeleteStaffResponse(
+        ok=True,
+        admin_id=str(deleted["admin_id"]),
+        email=str(deleted["email"]),
+        role=str(deleted["role"]),
     )
 
 

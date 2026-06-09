@@ -446,6 +446,76 @@ def update_admin_staff(
     return updated_row, None
 
 
+def delete_admin_user(admin_id: str) -> tuple[Optional[dict], Optional[str]]:
+    """
+    Permanently remove an admin_users row.
+
+    Returns (deleted_row_dict, error_message).
+    """
+    try:
+        admin_uuid = str(__import__("uuid").UUID(admin_id))
+    except ValueError:
+        return None, "Invalid admin_id"
+
+    try:
+        with _get_db_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT email, role, is_active, totp_enabled
+                FROM public.admin_users
+                WHERE id = %s
+                """,
+                (admin_uuid,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None, "Admin user not found"
+
+            email, role, is_active, totp_enabled = row[0], row[1], bool(row[2]), bool(row[3])
+
+            if role == "owner":
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM public.admin_users
+                    WHERE role = 'owner' AND id <> %s
+                    """,
+                    (admin_uuid,),
+                )
+                other_owners = int(cur.fetchone()[0] or 0)
+                if other_owners < 1:
+                    return None, "Cannot delete the last owner account"
+
+            cur.execute(
+                """
+                DELETE FROM public.admin_users
+                WHERE id = %s
+                RETURNING id::text
+                """,
+                (admin_uuid,),
+            )
+            deleted = cur.fetchone()
+            if not deleted:
+                return None, "Failed to delete admin user"
+
+            return {
+                "admin_id": deleted[0],
+                "email": email,
+                "role": role,
+                "is_active": is_active,
+                "totp_enabled": totp_enabled,
+            }, None
+    except Exception as exc:
+        err = str(exc).lower()
+        if "foreign key" in err or "violates" in err:
+            return (
+                None,
+                "Cannot delete: this admin has audit history. Deactivate instead.",
+            )
+        logger.exception("delete_admin_user failed admin=%s: %s", admin_id, exc)
+        return None, "Failed to delete admin user"
+
+
 def generate_totp_secret() -> str:
     """
     Generate a new TOTP secret (base32 encoded).
