@@ -72,6 +72,15 @@ ADMIN_2FA_ISSUER = os.getenv("ADMIN_2FA_ISSUER", "Sentient")
 ADMIN_2FA_WINDOW = int(os.getenv("ADMIN_2FA_WINDOW", "1"))  # TOTP time window tolerance
 # Comma-separated IPs allowed to hit /admin/* (empty = allow all, for local dev)
 ADMIN_ALLOWED_IPS_RAW = os.getenv("ADMIN_ALLOWED_IPS", "").strip()
+ADMIN_UI_URL = os.getenv(
+    "ADMIN_UI_URL",
+    "https://backend-production-2df9.up.railway.app/admin/ui",
+).strip()
+ADMIN_INVITE_FROM_EMAIL = os.getenv("ADMIN_INVITE_FROM_EMAIL", "").strip()
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
 
 # Voice (MVP Launch) — POST /chat/voice
 VOICE_ENABLED = os.getenv("VOICE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
