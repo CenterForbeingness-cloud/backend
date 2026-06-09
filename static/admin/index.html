@@ -94,6 +94,26 @@
 </head>
 <body>
   <div class="wrap">
+    <div id="setupView" class="hidden">
+      <h1>Set up admin access</h1>
+      <p class="sub" id="setupIntro">Create your password and connect your authenticator app.</p>
+      <div id="setupMsg"></div>
+      <div class="card">
+        <p class="sub" id="setupEmailLine"></p>
+        <div id="setupQrBlock" class="hidden">
+          <p class="sub">Scan this QR code in Google Authenticator, Authy, or similar:</p>
+          <p style="text-align:center;"><img id="setupQrImg" alt="TOTP QR code" width="200" height="200" /></p>
+          <p class="sub"><small>Or enter secret manually from your ops lead if QR fails.</small></p>
+        </div>
+        <label for="setupPassword">Choose password (8+ characters)</label>
+        <input id="setupPassword" type="password" autocomplete="new-password" />
+        <label for="setupTotp">Authenticator code (6 digits)</label>
+        <input id="setupTotp" type="text" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" />
+        <button type="button" id="setupCompleteBtn">Finish setup</button>
+        <button type="button" class="linkish" id="setupToLoginBtn">Already set up? Sign in</button>
+      </div>
+    </div>
+
     <div id="loginView">
       <h1>Sentient Admin</h1>
       <p class="sub">Internal ops only — not linked from the app.</p>
@@ -226,7 +246,9 @@
 
     const $ = (id) => document.getElementById(id);
     const loginView = $("loginView");
+    const setupView = $("setupView");
     const appView = $("appView");
+    let setupToken = "";
     const totpBlock = $("totpBlock");
     let pendingEmail = "";
     let me = { role: "viewer", email: "", admin_id: "" };
@@ -287,8 +309,41 @@
       }
     }
 
+    function inviteTokenFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("setup_token") || "";
+    }
+
+    async function showSetup(token) {
+      setupToken = token;
+      loginView.classList.add("hidden");
+      appView.classList.add("hidden");
+      setupView.classList.remove("hidden");
+      showMsg($("setupMsg"), "", true);
+      try {
+        const status = await api("/admin/auth/invite/status", {
+          method: "POST",
+          body: JSON.stringify({ token }),
+        });
+        $("setupEmailLine").textContent = `${status.email} · ${status.role}`;
+        const begin = await api("/admin/auth/invite/begin", {
+          method: "POST",
+          body: JSON.stringify({ token }),
+        });
+        const uri = begin.totp_provisioning_uri;
+        $("setupQrImg").src =
+          "https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=" +
+          encodeURIComponent(uri);
+        $("setupQrBlock").classList.remove("hidden");
+      } catch (e) {
+        showMsg($("setupMsg"), e.message, false);
+        $("setupQrBlock").classList.add("hidden");
+      }
+    }
+
     async function showApp() {
       loginView.classList.add("hidden");
+      setupView.classList.add("hidden");
       appView.classList.remove("hidden");
       try {
         await refreshMe();
@@ -311,12 +366,35 @@
       localStorage.removeItem(EMAIL_KEY);
       me = { role: "viewer", email: "", admin_id: "" };
       appView.classList.add("hidden");
+      setupView.classList.add("hidden");
       loginView.classList.remove("hidden");
       totpBlock.classList.add("hidden");
       pendingEmail = "";
       selectedUserId = null;
       $("userDetail").classList.add("hidden");
     }
+
+    $("setupCompleteBtn").addEventListener("click", async () => {
+      const password = $("setupPassword").value;
+      const totp = $("setupTotp").value.trim();
+      if (!setupToken) return;
+      try {
+        await api("/admin/auth/invite/complete", {
+          method: "POST",
+          body: JSON.stringify({ token: setupToken, password, totp_code: totp }),
+        });
+        showMsg($("setupMsg"), "Setup complete. Sign in below.", true);
+        window.history.replaceState({}, "", window.location.pathname);
+        setTimeout(showLogin, 1200);
+      } catch (e) {
+        showMsg($("setupMsg"), e.message, false);
+      }
+    });
+
+    $("setupToLoginBtn").addEventListener("click", () => {
+      window.history.replaceState({}, "", window.location.pathname);
+      showLogin();
+    });
 
     $("loginBtn").addEventListener("click", async () => {
       const msg = $("loginMsg");
@@ -535,10 +613,10 @@
       if (canEdit) {
         createBox.classList.remove("hidden");
         createBox.innerHTML = `
-          <h3>Add admin</h3>
+          <h3>Invite admin</h3>
+          <p class="sub" style="margin-top:0;">Sends an email with a link to set password and authenticator app.</p>
           <div class="row">
             <div><label>Email</label><input id="newAdminEmail" type="email" /></div>
-            <div><label>Password (8+)</label><input id="newAdminPassword" type="password" /></div>
             <div><label>Role</label>
               <select id="newAdminRole">
                 <option value="viewer">viewer</option>
@@ -546,7 +624,7 @@
                 <option value="owner">owner</option>
               </select>
             </div>
-            <div style="flex:0;"><button type="button" id="createAdminBtn">Create + 2FA</button></div>
+            <div style="flex:0;"><button type="button" id="createAdminBtn">Send invite</button></div>
           </div>
           <div id="totpReveal" class="hidden msg ok"></div>`;
         $("createAdminBtn").onclick = createAdmin;
@@ -566,7 +644,7 @@
               <td>${canEdit
                 ? `<select id="role-${s.admin_id}">${roles}</select>`
                 : rolePill(s.role)}</td>
-              <td>${s.is_active ? "active" : "inactive"} · 2FA ${s.totp_enabled ? "on" : "off"}</td>
+              <td>${s.is_active ? "active" : "inactive"} · ${s.totp_enabled ? "2FA on" : "<span class=\"pill\">pending setup</span>"}</td>
               <td>${canEdit ? `
                 <button type="button" onclick="saveRole('${s.admin_id}', '${s.email.replace(/'/g, "\\'")}')">Save role</button>
                 ${self ? "" : `<button type="button" class="secondary" onclick="toggleActive('${s.admin_id}', '${s.email.replace(/'/g, "\\'")}', ${!s.is_active})">${s.is_active ? "Deactivate" : "Activate"}</button>`}
@@ -581,20 +659,22 @@
 
     async function createAdmin() {
       const email = $("newAdminEmail").value.trim();
-      const password = $("newAdminPassword").value;
       const role = $("newAdminRole").value;
-      if (!confirm(`Create admin ${email} (${role})?`)) return;
+      if (!confirm(`Send admin invite to ${email} (${role})?`)) return;
       try {
         const data = await api("/admin/staff", {
           method: "POST",
-          body: JSON.stringify({ email, password, role }),
+          body: JSON.stringify({ email, role }),
         });
         const reveal = $("totpReveal");
         reveal.classList.remove("hidden");
-        reveal.innerHTML = `<strong>Save TOTP now</strong> (shown once):<br/>
-          Secret: <code>${data.totp_secret}</code><br/>
-          URI: <code style="word-break:break-all">${data.totp_provisioning_uri}</code>`;
-        showMsg($("appMsg"), `Created ${data.email} — scan QR / enter secret in authenticator.`, true);
+        if (data.email_sent) {
+          reveal.innerHTML = `<strong>Invite emailed</strong> to ${data.email}. They will set up 2FA at the admin link.`;
+        } else {
+          reveal.innerHTML = `<strong>SMTP not configured</strong> — share this link once (72h):<br/>
+            <code style="word-break:break-all">${data.invite_link || ""}</code>`;
+        }
+        showMsg($("appMsg"), `Invite created for ${data.email}.`, true);
         loadStaff();
       } catch (e) {
         showMsg($("appMsg"), e.message, false);
@@ -742,6 +822,11 @@
     });
 
     (async () => {
+      const invite = inviteTokenFromUrl();
+      if (invite) {
+        await showSetup(invite);
+        return;
+      }
       if (!token()) return;
       try {
         await api("/admin/me");

@@ -18,14 +18,13 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.admin_auth import (
-    create_admin_user,
-    generate_totp_secret,
     list_admin_staff,
-    set_totp_secret,
     update_admin_staff,
     verify_admin_token,
 )
-from app.config import ADMIN_2FA_ISSUER, FAIR_USE_LIMIT, STRIPE_PRICE_BY_COURSE_SLUG, SUPABASE_DB_URL, logger
+from app.admin_invite import create_admin_invite
+from app.email_service import build_admin_invite_url, send_admin_invite_email
+from app.config import FAIR_USE_LIMIT, STRIPE_PRICE_BY_COURSE_SLUG, SUPABASE_DB_URL, logger
 from app.courses import list_courses
 from app.entitlements import BUNDLE_INCLUDED_COURSES
 from app.user_profile import get_user_profile
@@ -45,8 +44,8 @@ from app.models import (
     AdminAuditLogResponse,
     AdminCourseItem,
     AdminCoursesResponse,
-    AdminCreateStaffRequest,
-    AdminCreateStaffResponse,
+    AdminInviteStaffRequest,
+    AdminInviteStaffResponse,
     AdminEntitlementMutationResponse,
     AdminEntitlementRow,
     AdminGrantEntitlementRequest,
@@ -644,49 +643,45 @@ def admin_list_staff(
     )
 
 
-@router.post("/staff", response_model=AdminCreateStaffResponse)
-def admin_create_staff(
+@router.post("/staff", response_model=AdminInviteStaffResponse)
+def admin_invite_staff(
     request: Request,
-    body: AdminCreateStaffRequest,
+    body: AdminInviteStaffRequest,
     admin: dict = Depends(get_current_admin),
-) -> AdminCreateStaffResponse:
-    """Create admin account and enroll TOTP (owner only)."""
+) -> AdminInviteStaffResponse:
+    """Invite admin by email — they set password + authenticator via link (owner only)."""
     _require_owner_role(admin)
 
-    new_id, error = create_admin_user(body.email, body.password, body.role)
-    if error or not new_id:
-        raise HTTPException(status_code=400, detail=error or "Create failed")
+    email = body.email.strip().lower()
+    new_id, plain_token, error = create_admin_invite(email, body.role)
+    if error or not new_id or not plain_token:
+        raise HTTPException(status_code=400, detail=error or "Invite failed")
 
-    import pyotp
-
-    totp_secret = generate_totp_secret()
-    ok, totp_err = set_totp_secret(body.email.strip(), totp_secret)
-    if not ok:
-        raise HTTPException(status_code=500, detail=totp_err or "Failed to set TOTP")
-
-    totp = pyotp.TOTP(totp_secret)
-    provisioning_uri = totp.provisioning_uri(
-        name=body.email.strip(),
-        issuer_name=ADMIN_2FA_ISSUER,
-    )
+    invite_link = build_admin_invite_url(plain_token)
+    email_sent, _send_err = send_admin_invite_email(email, invite_link, body.role)
 
     write_admin_audit_log(
         admin_id=str(admin["sub"]),
         action="ADMIN_USER_CREATE",
         resource_type="admin",
         resource_id=new_id,
-        details={"email": body.email.strip(), "role": body.role},
+        details={
+            "email": email,
+            "role": body.role,
+            "invite": True,
+            "email_sent": email_sent,
+        },
         request=request,
         http_status_code=200,
     )
 
-    return AdminCreateStaffResponse(
+    return AdminInviteStaffResponse(
         ok=True,
         admin_id=new_id,
-        email=body.email.strip(),
+        email=email,
         role=body.role,
-        totp_secret=totp_secret,
-        totp_provisioning_uri=provisioning_uri,
+        email_sent=email_sent,
+        invite_link=None if email_sent else invite_link,
     )
 
 
