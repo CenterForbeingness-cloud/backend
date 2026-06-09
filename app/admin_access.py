@@ -15,6 +15,12 @@ from fastapi import HTTPException, Request, status
 from app.config import logger
 
 _ADMIN_HEALTH_PATH = "/admin/health"
+# Auth + UI must stay reachable when allowlist is set (remote admins need login + invite setup).
+_ADMIN_IP_EXEMPT_PREFIXES = (
+    "/admin/health",
+    "/admin/ui",
+    "/admin/auth/",
+)
 
 
 def admin_allowed_ips() -> frozenset[str]:
@@ -41,7 +47,9 @@ def enforce_admin_ip(request: Request) -> None:
         return
 
     path = request.url.path
-    if path == _ADMIN_HEALTH_PATH:
+    if path == _ADMIN_HEALTH_PATH or any(
+        path.startswith(prefix) for prefix in _ADMIN_IP_EXEMPT_PREFIXES
+    ):
         return
 
     ip = client_ip(request)

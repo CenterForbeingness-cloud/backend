@@ -56,6 +56,10 @@ from app.config import (
 )
 from app.analytics import track, track_purchase_completed
 from app.models import (
+    AdminInviteBeginResponse,
+    AdminInviteCompleteRequest,
+    AdminInviteStatusResponse,
+    AdminInviteTokenRequest,
     AdminLoginRequest,
     AdminTokenResponse,
     AdminTOTPVerifyRequest,
@@ -113,6 +117,7 @@ from app.user_profile import (
 from app.admin_access import enforce_admin_ip, is_admin_path
 from app.admin_api import router as admin_router, write_admin_audit_log
 from app.admin_auth import admin_login, verify_totp as verify_admin_totp
+from app.admin_invite import begin_invite_setup, complete_invite_setup, invite_status
 from app.rate_limit import AUTH_LIMIT, BILLING_LIMIT, CHAT_LIMIT, SESSIONS_LIMIT, limiter
 from app.voice import (
     assert_voice_enabled,
@@ -1355,3 +1360,33 @@ def admin_verify_totp_endpoint(request: Request, req: AdminTOTPVerifyRequest) ->
         admin_email=req.email,
         role=role,
     )
+
+
+@app.post("/admin/auth/invite/status", response_model=AdminInviteStatusResponse)
+@AUTH_LIMIT
+def admin_invite_status_endpoint(req: AdminInviteTokenRequest) -> AdminInviteStatusResponse:
+    """Validate invite token before setup UI."""
+    data, error = invite_status(req.token)
+    if error or not data:
+        raise HTTPException(status_code=400, detail=error or "Invalid invite")
+    return AdminInviteStatusResponse(**data)
+
+
+@app.post("/admin/auth/invite/begin", response_model=AdminInviteBeginResponse)
+@AUTH_LIMIT
+def admin_invite_begin_endpoint(req: AdminInviteTokenRequest) -> AdminInviteBeginResponse:
+    """Return TOTP provisioning URI for authenticator app QR scan."""
+    data, error = begin_invite_setup(req.token)
+    if error or not data:
+        raise HTTPException(status_code=400, detail=error or "Setup failed")
+    return AdminInviteBeginResponse(**data)
+
+
+@app.post("/admin/auth/invite/complete")
+@AUTH_LIMIT
+def admin_invite_complete_endpoint(req: AdminInviteCompleteRequest) -> dict:
+    """Set password and confirm TOTP to finish admin invite."""
+    ok, error = complete_invite_setup(req.token, req.password, req.totp_code)
+    if not ok:
+        raise HTTPException(status_code=400, detail=error or "Setup failed")
+    return {"ok": True, "message": "Account ready. You can sign in with your password and authenticator app."}

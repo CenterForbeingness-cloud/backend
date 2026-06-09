@@ -54,7 +54,14 @@ def admin_login(email: str, password: str) -> Tuple[Optional[str], Optional[str]
                 return None, "Invalid credentials"
             
             admin_id, password_hash, totp_secret, totp_enabled = row
-            
+
+            if not totp_enabled:
+                logger.warning("Admin login blocked: setup incomplete for %s", email)
+                return None, (
+                    "Account setup is incomplete. Open the invite link from your email "
+                    "to set your password and authenticator app."
+                )
+
             # Verify password with bcrypt
             try:
                 if not bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8")):
