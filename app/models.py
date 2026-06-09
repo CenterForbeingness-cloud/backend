@@ -405,19 +405,50 @@ class AdminScheduleHealthResponse(BaseModel):
     days: list[AdminScheduleDayRow] = Field(default_factory=list)
 
 
-class AdminCreateStaffRequest(BaseModel):
+class AdminInviteStaffRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=255)
-    password: str = Field(..., min_length=8, max_length=128)
     role: str = Field(default="viewer", pattern="^(owner|editor|viewer)$")
 
 
-class AdminCreateStaffResponse(BaseModel):
+class AdminInviteStaffResponse(BaseModel):
     ok: bool
     admin_id: str
     email: str
     role: str
-    totp_secret: str
+    email_sent: bool = False
+    invite_link: Optional[str] = None
+
+
+class AdminInviteTokenRequest(BaseModel):
+    token: str = Field(..., min_length=16, max_length=256)
+
+
+class AdminInviteStatusResponse(BaseModel):
+    email: str
+    role: str
+    totp_configured: bool = False
+
+
+class AdminInviteBeginResponse(BaseModel):
+    email: str
+    role: str
     totp_provisioning_uri: str
+    issuer: str
+
+
+class AdminInviteCompleteRequest(BaseModel):
+    token: str = Field(..., min_length=16, max_length=256)
+    password: str = Field(..., min_length=8, max_length=128)
+    totp_code: str = Field(..., pattern="^[0-9]{6}$")
+
+
+# Backward-compatible aliases (legacy direct-create flow removed)
+class AdminCreateStaffRequest(AdminInviteStaffRequest):
+    pass
+
+
+class AdminCreateStaffResponse(AdminInviteStaffResponse):
+    pass
 
 
 class AdminUpdateStaffRequest(BaseModel):

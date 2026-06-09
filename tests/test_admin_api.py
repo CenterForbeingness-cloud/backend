@@ -73,6 +73,17 @@ def test_enforce_admin_ip_blocks_when_allowlist_set() -> None:
     assert exc.value.status_code == 403
 
 
+def test_enforce_admin_ip_allows_auth_when_allowlist_set() -> None:
+    request = MagicMock()
+    request.url.path = "/admin/auth/login"
+    request.headers = {}
+    request.client = MagicMock()
+    request.client.host = "203.0.113.9"
+
+    with patch("app.admin_access.admin_allowed_ips", return_value=frozenset({"203.0.113.1"})):
+        enforce_admin_ip(request)
+
+
 def test_enforce_admin_ip_allows_health_probe() -> None:
     request = MagicMock()
     request.url.path = "/admin/health"
