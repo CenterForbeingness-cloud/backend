@@ -91,6 +91,20 @@
     .detail-grid { display: grid; gap: 12px; }
     @media (min-width: 640px) { .detail-grid { grid-template-columns: 1fr 1fr; } }
     h3 { margin: 0 0 8px; font-size: 0.95rem; color: var(--accent2); }
+    .editor-section {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid #1a3a44;
+    }
+    textarea.code {
+      font-family: ui-monospace, monospace;
+      font-size: 0.8rem;
+      min-height: 160px;
+    }
+    textarea.day-content { min-height: 80px; font-size: 0.85rem; }
+    .day-row { margin-bottom: 12px; padding: 12px; background: #0a1e28; border-radius: 8px; }
+    .pill.draft { background: #3d3520; color: #f4d4a8; }
+    .pill.live { background: #2e4a3a; color: var(--accent2); }
   </style>
 </head>
 <body>
@@ -199,9 +213,19 @@
       </section>
 
       <section id="tab-courses" class="card hidden">
-        <h2 style="margin-top:0;font-size:1.1rem;">Course catalog</h2>
-        <p class="sub" style="margin-top:0;">From <code>GET /admin/courses</code> (DB + env Stripe prices).</p>
+        <div class="toolbar">
+          <div>
+            <h2 style="margin:0;font-size:1.1rem;">Course catalog</h2>
+            <p class="sub" style="margin:4px 0 0;">Edit metadata, daily schedule, weeks, and Stripe pricing.</p>
+          </div>
+          <div class="row" style="flex:0;margin:0;">
+            <button type="button" class="secondary" id="refreshCoursesBtn" style="margin:0;">Refresh</button>
+            <button type="button" id="newCourseToggleBtn" class="hidden" style="margin:0;">New course</button>
+          </div>
+        </div>
+        <div id="courseCreateBox" class="hidden"></div>
         <div id="coursesTable"></div>
+        <div id="courseEditor" class="hidden"></div>
       </section>
 
       <section id="tab-staff" class="card hidden">
@@ -226,6 +250,9 @@
               <option value="ADMIN_USER_DEACTIVATE">ADMIN_USER_DEACTIVATE</option>
               <option value="ADMIN_USER_ACTIVATE">ADMIN_USER_ACTIVATE</option>
               <option value="ADMIN_USER_DELETE">ADMIN_USER_DELETE</option>
+              <option value="CREATE_COURSE">CREATE_COURSE</option>
+              <option value="UPDATE_COURSE">UPDATE_COURSE</option>
+              <option value="PUBLISH_COURSE">PUBLISH_COURSE</option>
             </select>
           </div>
           <div style="flex:0;display:flex;gap:8px;align-items:flex-end;">
@@ -581,25 +608,318 @@
       }
     });
 
+    function esc(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function renderCourseCreateForm() {
+      const box = $("courseCreateBox");
+      if (!canMutate()) {
+        box.classList.add("hidden");
+        return;
+      }
+      box.classList.remove("hidden");
+      box.innerHTML = `
+        <h3>New course</h3>
+        <div class="row">
+          <div><label>Slug</label><input id="newCourseSlug" placeholder="mindful-foundations" pattern="[a-z0-9\\-]+" /></div>
+          <div><label>Title</label><input id="newCourseTitle" /></div>
+          <div style="flex:0;align-self:flex-end;"><label><input type="checkbox" id="newCoursePublished" /> Published</label></div>
+        </div>
+        <label>Description</label>
+        <textarea id="newCourseDesc" rows="2"></textarea>
+        <button type="button" id="createCourseBtn">Create course</button>`;
+      $("createCourseBtn").onclick = createCourse;
+    }
+
+    async function createCourse() {
+      const slug = $("newCourseSlug").value.trim().toLowerCase();
+      const title = $("newCourseTitle").value.trim();
+      if (!slug || !title) {
+        showMsg($("appMsg"), "Slug and title are required.", false);
+        return;
+      }
+      try {
+        await api("/admin/courses", {
+          method: "POST",
+          body: JSON.stringify({
+            course_slug: slug,
+            title,
+            description: $("newCourseDesc").value.trim() || null,
+            is_published: $("newCoursePublished").checked,
+          }),
+        });
+        showMsg($("appMsg"), `Created course ${slug}.`, true);
+        openCourseEditor(slug);
+      } catch (e) {
+        showMsg($("appMsg"), e.message, false);
+      }
+    }
+
     async function loadCoursesTab() {
-      const box = $("coursesTable");
+      const listBox = $("coursesTable");
+      const editor = $("courseEditor");
+      const toggleBtn = $("newCourseToggleBtn");
+      if (canMutate()) {
+        toggleBtn.classList.remove("hidden");
+        toggleBtn.onclick = () => {
+          const box = $("courseCreateBox");
+          box.classList.toggle("hidden");
+          if (!box.classList.contains("hidden")) renderCourseCreateForm();
+        };
+      } else {
+        toggleBtn.classList.add("hidden");
+      }
+      if (editingCourseSlug) return;
+      editor.classList.add("hidden");
+      listBox.classList.remove("hidden");
       try {
         const data = await api("/admin/courses");
         const courses = data.courses || [];
         if (!courses.length) {
-          box.innerHTML = "<p class=\"sub\">No courses returned.</p>";
+          listBox.innerHTML = "<p class=\"sub\">No courses yet. Create one or seed Supabase.</p>";
+          renderCourseCreateForm();
           return;
         }
-        box.innerHTML = `<table><thead><tr><th>Slug</th><th>Title</th><th>Stripe price</th><th>Bundle includes</th></tr></thead><tbody>
+        listBox.innerHTML = `<table><thead><tr>
+          <th>Slug</th><th>Title</th><th>Status</th><th>Days</th><th>Weeks</th><th>Price</th><th></th>
+        </tr></thead><tbody>
           ${courses.map((c) => `<tr>
-            <td><code>${c.course_slug}</code></td>
-            <td>${c.title || ""}</td>
-            <td><code>${c.price_id || "—"}</code></td>
-            <td>${(c.bundle_included_slugs || []).map((s) => `<span class="pill">${s}</span>`).join(" ") || "—"}</td>
+            <td><code>${esc(c.course_slug)}</code></td>
+            <td>${esc(c.title || "")}</td>
+            <td><span class="pill ${c.is_published ? "live" : "draft"}">${c.is_published ? "live" : "draft"}</span></td>
+            <td>${c.day_count ?? 0}</td>
+            <td>${c.week_count ?? 0}</td>
+            <td><code>${esc(c.price_id || "—")}</code></td>
+            <td><button type="button" class="secondary" onclick="openCourseEditor('${c.course_slug.replace(/'/g, "\\'")}')">Edit</button></td>
           </tr>`).join("")}
         </tbody></table>`;
       } catch (e) {
-        box.innerHTML = `<div class="msg err">${e.message}</div>`;
+        listBox.innerHTML = `<div class="msg err">${esc(e.message)}</div>`;
+      }
+    }
+
+    let editingCourseSlug = null;
+
+    window.openCourseEditor = async (slug) => {
+      editingCourseSlug = slug;
+      $("coursesTable").classList.add("hidden");
+      $("courseCreateBox").classList.add("hidden");
+      const box = $("courseEditor");
+      box.classList.remove("hidden");
+      box.innerHTML = "<p class=\"sub\">Loading course…</p>";
+      try {
+        const c = await api("/admin/courses/" + encodeURIComponent(slug));
+        renderCourseEditor(c);
+      } catch (e) {
+        box.innerHTML = `<div class="msg err">${esc(e.message)}</div>
+          <button type="button" class="secondary" onclick="closeCourseEditor()">Back</button>`;
+      }
+    };
+
+    window.closeCourseEditor = () => {
+      editingCourseSlug = null;
+      $("courseEditor").classList.add("hidden");
+      loadCoursesTab();
+    };
+
+    function renderScheduleDayRows(days) {
+      const list = days && days.length ? days : [{ day_number: 1, day_title: "", content: "" }];
+      return list.map((d, i) => `
+        <div class="day-row" data-day-idx="${i}">
+          <div class="row">
+            <div style="max-width:100px;"><label>Day #</label><input type="number" class="day-num" min="1" value="${d.day_number}" ${canMutate() ? "" : "disabled"} /></div>
+            <div><label>Title (optional)</label><input class="day-title" value="${esc(d.day_title || "")}" ${canMutate() ? "" : "disabled"} /></div>
+            ${canMutate() ? `<div style="flex:0;align-self:flex-end;"><button type="button" class="danger secondary" onclick="removeScheduleDay(this)">Remove</button></div>` : ""}
+          </div>
+          <label>Content (injected in companion chat)</label>
+          <textarea class="day-content" rows="4" ${canMutate() ? "" : "disabled"}>${esc(d.content || "")}</textarea>
+        </div>`).join("");
+    }
+
+    window.removeScheduleDay = (btn) => {
+      btn.closest(".day-row")?.remove();
+    };
+
+    window.addScheduleDay = () => {
+      const box = $("scheduleDaysBox");
+      const rows = box.querySelectorAll(".day-row");
+      let maxDay = 0;
+      rows.forEach((r) => {
+        const n = parseInt(r.querySelector(".day-num")?.value || "0", 10);
+        if (n > maxDay) maxDay = n;
+      });
+      const wrap = document.createElement("div");
+      wrap.innerHTML = renderScheduleDayRows([{ day_number: maxDay + 1, day_title: "", content: "" }]);
+      box.appendChild(wrap.firstElementChild);
+    };
+
+    function collectScheduleDays() {
+      const days = [];
+      document.querySelectorAll("#scheduleDaysBox .day-row").forEach((row) => {
+        const content = row.querySelector(".day-content")?.value.trim();
+        const day_number = parseInt(row.querySelector(".day-num")?.value || "0", 10);
+        if (!content || day_number < 1) return;
+        const day_title = row.querySelector(".day-title")?.value.trim() || null;
+        days.push({ day_number, day_title, content });
+      });
+      return days.sort((a, b) => a.day_number - b.day_number);
+    }
+
+    function renderCourseEditor(c) {
+      const edit = canMutate();
+      const prod = c.product || {};
+      const weeksJson = JSON.stringify(c.weeks || [], null, 2);
+      const box = $("courseEditor");
+      box.innerHTML = `
+        <div class="toolbar">
+          <div>
+            <h2 style="margin:0;"><code>${esc(c.course_slug)}</code></h2>
+            <p class="sub" style="margin:4px 0 0;">${c.day_count} schedule days · ${c.week_count} weeks
+              ${(c.bundle_included_slugs || []).length ? "· bundle unlocks: " + c.bundle_included_slugs.map((s) => esc(s)).join(", ") : ""}</p>
+          </div>
+          <button type="button" class="secondary" onclick="closeCourseEditor()" style="margin:0;">← All courses</button>
+        </div>
+
+        <div class="editor-section">
+          <h3>Basics</h3>
+          <label>Title</label>
+          <input id="edCourseTitle" value="${esc(c.title)}" ${edit ? "" : "disabled"} />
+          <label>Description</label>
+          <textarea id="edCourseDesc" rows="2" ${edit ? "" : "disabled"}>${esc(c.description || "")}</textarea>
+          <label><input type="checkbox" id="edCoursePublished" ${c.is_published ? "checked" : ""} ${edit ? "" : "disabled"} /> Published (visible in app catalog)</label>
+          ${edit ? `<button type="button" id="saveBasicsBtn">Save basics</button>` : "<p class=\"sub\">Viewers cannot edit courses.</p>"}
+        </div>
+
+        <div class="editor-section">
+          <h3>Daily schedule</h3>
+          <p class="sub" style="margin-top:0;">One row per companion day. Replaces all days on save.</p>
+          <div id="scheduleDaysBox">${renderScheduleDayRows(c.schedule_days)}</div>
+          ${edit ? `
+            <button type="button" class="secondary" onclick="addScheduleDay()">Add day</button>
+            <button type="button" id="saveScheduleBtn">Save schedule</button>` : ""}
+        </div>
+
+        <div class="editor-section">
+          <h3>Weeks &amp; lessons (storefront)</h3>
+          <p class="sub" style="margin-top:0;">JSON array — week_number, title, lessons[]. Replaces entire tree on save.</p>
+          <textarea id="edWeeksJson" class="code" ${edit ? "" : "disabled"}>${esc(weeksJson)}</textarea>
+          ${edit ? `<button type="button" id="saveWeeksBtn">Save weeks</button>` : ""}
+        </div>
+
+        <div class="editor-section">
+          <h3>Stripe product</h3>
+          <p class="sub" style="margin-top:0;">${prod.price_source === "env" ? "Currently using env fallback: " + esc(c.env_price_id || "") : prod.price_source === "db" ? "Stored in course_products" : "Not configured"}</p>
+          <div class="row">
+            <div><label>Product ID</label><input id="edProdId" value="${esc(prod.provider_product_id || "")}" ${edit ? "" : "disabled"} /></div>
+            <div><label>Price ID</label><input id="edPriceId" value="${esc(prod.provider_price_id || c.env_price_id || "")}" ${edit ? "" : "disabled"} /></div>
+          </div>
+          <div class="row">
+            <div><label>Amount (cents)</label><input type="number" id="edAmountCents" min="0" value="${prod.unit_amount_cents ?? ""}" ${edit ? "" : "disabled"} /></div>
+            <div><label>Currency</label><input id="edCurrency" maxlength="3" value="${esc(prod.currency || "usd")}" ${edit ? "" : "disabled"} /></div>
+            <div style="flex:0;align-self:flex-end;"><label><input type="checkbox" id="edProdActive" ${prod.is_active !== false ? "checked" : ""} ${edit ? "" : "disabled"} /> Active</label></div>
+          </div>
+          ${edit ? `<button type="button" id="saveProductBtn">Save Stripe product</button>` : ""}
+        </div>
+
+        <div class="editor-section">
+          <h3>RAG corpus</h3>
+          <p class="sub" style="margin-top:0;">Track C — upload not in admin yet. Add text under <code>rag/raw/courses/${esc(c.course_slug)}/</code> and run <code>embed.py</code>.</p>
+        </div>`;
+
+      if (edit) {
+        $("saveBasicsBtn").onclick = () => saveCourseBasics(c.course_slug);
+        $("saveScheduleBtn").onclick = () => saveCourseSchedule(c.course_slug);
+        $("saveWeeksBtn").onclick = () => saveCourseWeeks(c.course_slug);
+        $("saveProductBtn").onclick = () => saveCourseProduct(c.course_slug);
+      }
+    }
+
+    async function saveCourseBasics(slug) {
+      try {
+        await api("/admin/courses/" + encodeURIComponent(slug), {
+          method: "PATCH",
+          body: JSON.stringify({
+            title: $("edCourseTitle").value.trim(),
+            description: $("edCourseDesc").value.trim() || null,
+            is_published: $("edCoursePublished").checked,
+          }),
+        });
+        showMsg($("appMsg"), "Course basics saved.", true);
+        openCourseEditor(slug);
+      } catch (e) {
+        showMsg($("appMsg"), e.message, false);
+      }
+    }
+
+    async function saveCourseSchedule(slug) {
+      const days = collectScheduleDays();
+      if (!days.length) {
+        showMsg($("appMsg"), "Add at least one day with content.", false);
+        return;
+      }
+      if (!confirm(`Replace all ${days.length} schedule day(s) for ${slug}?`)) return;
+      try {
+        const data = await api("/admin/courses/" + encodeURIComponent(slug) + "/schedule", {
+          method: "PUT",
+          body: JSON.stringify({ days }),
+        });
+        showMsg($("appMsg"), `Schedule saved (${data.day_count} days).`, true);
+        openCourseEditor(slug);
+      } catch (e) {
+        showMsg($("appMsg"), e.message, false);
+      }
+    }
+
+    async function saveCourseWeeks(slug) {
+      let weeks;
+      try {
+        weeks = JSON.parse($("edWeeksJson").value);
+        if (!Array.isArray(weeks)) throw new Error("Weeks must be a JSON array");
+      } catch (e) {
+        showMsg($("appMsg"), "Invalid weeks JSON: " + e.message, false);
+        return;
+      }
+      if (!confirm(`Replace all weeks/lessons for ${slug}?`)) return;
+      try {
+        await api("/admin/courses/" + encodeURIComponent(slug) + "/weeks", {
+          method: "PUT",
+          body: JSON.stringify({ weeks }),
+        });
+        showMsg($("appMsg"), "Weeks catalog saved.", true);
+        openCourseEditor(slug);
+      } catch (e) {
+        showMsg($("appMsg"), e.message, false);
+      }
+    }
+
+    async function saveCourseProduct(slug) {
+      const provider_product_id = $("edProdId").value.trim();
+      const provider_price_id = $("edPriceId").value.trim();
+      const unit_amount_cents = parseInt($("edAmountCents").value || "0", 10);
+      if (!provider_product_id || !provider_price_id) {
+        showMsg($("appMsg"), "Product ID and Price ID are required.", false);
+        return;
+      }
+      try {
+        await api("/admin/courses/" + encodeURIComponent(slug) + "/product", {
+          method: "PATCH",
+          body: JSON.stringify({
+            provider_product_id,
+            provider_price_id,
+            unit_amount_cents,
+            currency: $("edCurrency").value.trim().toLowerCase() || "usd",
+            is_active: $("edProdActive").checked,
+          }),
+        });
+        showMsg($("appMsg"), "Stripe product saved.", true);
+        openCourseEditor(slug);
+      } catch (e) {
+        showMsg($("appMsg"), e.message, false);
       }
     }
 
@@ -820,6 +1140,10 @@
       }
     }
 
+    $("refreshCoursesBtn")?.addEventListener("click", () => {
+      editingCourseSlug = null;
+      loadCoursesTab();
+    });
     $("refreshOpsBtn")?.addEventListener("click", loadOpsSummary);
     $("opsDays")?.addEventListener("change", loadOpsSummary);
     $("checkScheduleBtn")?.addEventListener("click", loadScheduleHealth);
