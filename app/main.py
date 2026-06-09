@@ -1364,7 +1364,9 @@ def admin_verify_totp_endpoint(request: Request, req: AdminTOTPVerifyRequest) ->
 
 @app.post("/admin/auth/invite/status", response_model=AdminInviteStatusResponse)
 @AUTH_LIMIT
-def admin_invite_status_endpoint(req: AdminInviteTokenRequest) -> AdminInviteStatusResponse:
+def admin_invite_status_endpoint(
+    request: Request, req: AdminInviteTokenRequest
+) -> AdminInviteStatusResponse:
     """Validate invite token before setup UI."""
     data, error = invite_status(req.token)
     if error or not data:
@@ -1374,7 +1376,9 @@ def admin_invite_status_endpoint(req: AdminInviteTokenRequest) -> AdminInviteSta
 
 @app.post("/admin/auth/invite/begin", response_model=AdminInviteBeginResponse)
 @AUTH_LIMIT
-def admin_invite_begin_endpoint(req: AdminInviteTokenRequest) -> AdminInviteBeginResponse:
+def admin_invite_begin_endpoint(
+    request: Request, req: AdminInviteTokenRequest
+) -> AdminInviteBeginResponse:
     """Return TOTP provisioning URI for authenticator app QR scan."""
     data, error = begin_invite_setup(req.token)
     if error or not data:
@@ -1384,7 +1388,9 @@ def admin_invite_begin_endpoint(req: AdminInviteTokenRequest) -> AdminInviteBegi
 
 @app.post("/admin/auth/invite/complete")
 @AUTH_LIMIT
-def admin_invite_complete_endpoint(req: AdminInviteCompleteRequest) -> dict:
+def admin_invite_complete_endpoint(
+    request: Request, req: AdminInviteCompleteRequest
+) -> dict:
     """Set password and confirm TOTP to finish admin invite."""
     ok, error = complete_invite_setup(req.token, req.password, req.totp_code)
     if not ok:
