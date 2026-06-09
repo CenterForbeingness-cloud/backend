@@ -18,6 +18,37 @@ from app.config import (
     logger,
 )
 
+_SSL_PORTS = frozenset({465, 2465})
+_STARTTLS_PORTS = frozenset({25, 587, 2587})
+
+
+def _smtp_login_user() -> str:
+    """Resend SMTP username is always the literal string ``resend``."""
+    if SMTP_USER:
+        return SMTP_USER
+    if "resend.com" in SMTP_HOST.lower():
+        return "resend"
+    return ""
+
+
+def _send_via_smtp(msg: EmailMessage) -> None:
+    login_user = _smtp_login_user()
+    if SMTP_PORT in _SSL_PORTS:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+            if login_user and SMTP_PASSWORD:
+                server.login(login_user, SMTP_PASSWORD)
+            server.send_message(msg)
+        return
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+        server.ehlo()
+        if SMTP_PORT in _STARTTLS_PORTS:
+            server.starttls()
+            server.ehlo()
+        if login_user and SMTP_PASSWORD:
+            server.login(login_user, SMTP_PASSWORD)
+        server.send_message(msg)
+
 
 def send_admin_invite_email(
     to_email: str,
@@ -63,15 +94,16 @@ This link expires in 72 hours. If you did not expect this email, ignore it.
     msg.set_content(body)
     msg.add_alternative(html, subtype="html")
 
+    if not SMTP_PASSWORD:
+        logger.warning(
+            "Admin invite email not sent (SMTP_PASSWORD missing). Invite URL for %s: %s",
+            to_email,
+            invite_url,
+        )
+        return False, "SMTP_PASSWORD not configured"
+
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
-            server.ehlo()
-            if SMTP_PORT == 587:
-                server.starttls()
-                server.ehlo()
-            if SMTP_USER and SMTP_PASSWORD:
-                server.login(SMTP_USER, SMTP_PASSWORD)
-            server.send_message(msg)
+        _send_via_smtp(msg)
         logger.info("Admin invite email sent to %s", to_email)
         return True, None
     except Exception as exc:

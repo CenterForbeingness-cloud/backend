@@ -372,6 +372,36 @@ def test_delete_admin_user_blocks_last_owner() -> None:
     assert error == "Cannot delete the last owner account"
 
 
+def test_launch_gates_not_ready_by_default_in_tests() -> None:
+    from app.launch_gates import evaluate_launch_gates
+
+    with patch.dict("os.environ", {}, clear=False):
+        result = evaluate_launch_gates()
+    assert "checks" in result
+    assert "ready" in result
+    assert isinstance(result["blocking"], list)
+
+
+def test_create_admin_course_request_validates_slug() -> None:
+    from pydantic import ValidationError
+
+    from app.models import AdminCreateCourseRequest
+
+    with pytest.raises(ValidationError):
+        AdminCreateCourseRequest(course_slug="INVALID SLUG", title="Test")
+
+
+def test_admin_get_course_endpoint_not_found() -> None:
+    client = TestClient(app)
+    with patch("app.admin_api.verify_admin_token", return_value={"sub": "a", "type": "admin"}):
+        with patch("app.admin_api.get_admin_course_detail", return_value=None):
+            res = client.get(
+                "/admin/courses/missing-slug",
+                headers={"Authorization": "Bearer x"},
+            )
+    assert res.status_code == 404
+
+
 def test_admin_delete_staff_endpoint_blocks_self() -> None:
     client = TestClient(app)
     admin_id = "00000000-0000-0000-0000-0000000000aa"

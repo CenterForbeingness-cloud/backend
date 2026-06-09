@@ -457,6 +457,14 @@ def health() -> dict:
     }
 
 
+@app.get("/health/launch-gates")
+def health_launch_gates(strict_live: bool = False) -> dict:
+    """Track A readiness — env flags only (no secret values). ?strict_live=true requires sk_live_."""
+    from app.launch_gates import evaluate_launch_gates
+
+    return evaluate_launch_gates(strict_live=strict_live)
+
+
 @app.get("/billing/return/success", response_class=HTMLResponse)
 def billing_return_success() -> str:
     return _checkout_return_page(

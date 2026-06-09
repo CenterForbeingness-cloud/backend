@@ -25,9 +25,7 @@ from app.admin_auth import (
 )
 from app.admin_invite import create_admin_invite
 from app.email_service import build_admin_invite_url, send_admin_invite_email
-from app.config import FAIR_USE_LIMIT, STRIPE_PRICE_BY_COURSE_SLUG, SUPABASE_DB_URL, logger
-from app.courses import list_courses
-from app.entitlements import BUNDLE_INCLUDED_COURSES
+from app.config import FAIR_USE_LIMIT, SUPABASE_DB_URL, logger
 from app.user_profile import get_user_profile
 from app.daily_schedule import validate_course_slug
 from app.entitlements import (
@@ -37,14 +35,30 @@ from app.entitlements import (
     resolve_chat_plan,
     revoke_entitlement,
 )
+from app.admin_courses import (
+    create_admin_course,
+    get_admin_course_detail,
+    list_all_admin_courses,
+    replace_admin_course_schedule,
+    replace_admin_course_weeks,
+    update_admin_course,
+    upsert_admin_course_product,
+)
 from app.admin_ops import get_admin_analytics_summary, get_admin_schedule_health
 from app.models import (
     AdminAnalyticsEventRow,
     AdminAnalyticsSummaryResponse,
     AdminAuditLogEntry,
     AdminAuditLogResponse,
+    AdminCourseDetailResponse,
     AdminCourseItem,
     AdminCoursesResponse,
+    AdminCreateCourseRequest,
+    AdminReplaceScheduleRequest,
+    AdminReplaceWeeksRequest,
+    AdminScheduleReplaceResponse,
+    AdminUpdateCourseRequest,
+    AdminUpsertProductRequest,
     AdminInviteStaffRequest,
     AdminInviteStaffResponse,
     AdminEntitlementMutationResponse,
@@ -85,6 +99,9 @@ _AUDIT_FILTER_ACTIONS = frozenset({
     "ADMIN_USER_DEACTIVATE",
     "ADMIN_USER_ACTIVATE",
     "ADMIN_USER_DELETE",
+    "CREATE_COURSE",
+    "UPDATE_COURSE",
+    "PUBLISH_COURSE",
 })
 
 
@@ -488,45 +505,8 @@ def get_admin_user_detail(user_id: str) -> AdminUserDetailResponse:
 
 
 def list_admin_courses() -> AdminCoursesResponse:
-    """Published catalog + env price fallbacks and bundle children."""
-    raw = list_courses()
-    by_slug: dict[str, AdminCourseItem] = {}
-
-    for course in raw:
-        slug = str(course.get("course_slug") or "").strip()
-        if not slug:
-            continue
-        included = list(BUNDLE_INCLUDED_COURSES.get(slug, ()))
-        by_slug[slug] = AdminCourseItem(
-            course_slug=slug,
-            title=str(course.get("title") or slug),
-            price_id=course.get("price_id"),
-            is_published=True,
-            bundle_included_slugs=included,
-        )
-
-    for slug in BUNDLE_INCLUDED_COURSES:
-        if slug not in by_slug:
-            by_slug[slug] = AdminCourseItem(
-                course_slug=slug,
-                title=slug.replace("-", " ").title(),
-                price_id=STRIPE_PRICE_BY_COURSE_SLUG.get(slug),
-                is_published=True,
-                bundle_included_slugs=list(BUNDLE_INCLUDED_COURSES[slug]),
-            )
-
-    for slug, price_id in STRIPE_PRICE_BY_COURSE_SLUG.items():
-        if slug not in by_slug:
-            by_slug[slug] = AdminCourseItem(
-                course_slug=slug,
-                title=slug.replace("-", " ").title(),
-                price_id=price_id,
-                is_published=True,
-                bundle_included_slugs=list(BUNDLE_INCLUDED_COURSES.get(slug, ())),
-            )
-
-    courses = sorted(by_slug.values(), key=lambda c: c.course_slug)
-    return AdminCoursesResponse(courses=courses)
+    """All catalog rows (draft + published) plus env-only slugs."""
+    return AdminCoursesResponse(courses=list_all_admin_courses())
 
 
 def list_admin_audit_log(
@@ -799,8 +779,178 @@ def admin_delete_staff_member(
 def admin_list_courses(
     _admin: dict = Depends(get_current_admin),
 ) -> AdminCoursesResponse:
-    """Published courses, Stripe price IDs, and bundle children."""
+    """All courses (draft + published), Stripe prices, bundle children."""
     return list_admin_courses()
+
+
+@router.get("/courses/{course_slug}", response_model=AdminCourseDetailResponse)
+def admin_get_course(
+    course_slug: str,
+    _admin: dict = Depends(get_current_admin),
+) -> AdminCourseDetailResponse:
+    """Full course aggregate for the CMS editor."""
+    try:
+        detail = get_admin_course_detail(course_slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Course not found")
+    return detail
+
+
+@router.post("/courses", response_model=AdminCourseDetailResponse)
+def admin_create_course_endpoint(
+    request: Request,
+    body: AdminCreateCourseRequest,
+    admin: dict = Depends(get_current_admin),
+) -> AdminCourseDetailResponse:
+    """Create course shell (slug, title, publish flag)."""
+    _require_mutation_role(admin)
+    try:
+        detail = create_admin_course(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    write_admin_audit_log(
+        admin_id=str(admin["sub"]),
+        action="CREATE_COURSE",
+        resource_type="course",
+        resource_id=detail.course_slug,
+        details={"title": detail.title, "is_published": detail.is_published},
+        request=request,
+        http_status_code=200,
+    )
+    return detail
+
+
+@router.patch("/courses/{course_slug}", response_model=AdminCourseDetailResponse)
+def admin_update_course_endpoint(
+    course_slug: str,
+    request: Request,
+    body: AdminUpdateCourseRequest,
+    admin: dict = Depends(get_current_admin),
+) -> AdminCourseDetailResponse:
+    """Update title, description, and/or publish flag."""
+    _require_mutation_role(admin)
+    try:
+        previous = get_admin_course_detail(course_slug)
+        detail = update_admin_course(course_slug, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    audit_action = "UPDATE_COURSE"
+    if body.is_published is True and previous and not previous.is_published:
+        audit_action = "PUBLISH_COURSE"
+
+    write_admin_audit_log(
+        admin_id=str(admin["sub"]),
+        action=audit_action,
+        resource_type="course",
+        resource_id=course_slug,
+        details={
+            "title": detail.title,
+            "is_published": detail.is_published,
+            "fields": body.model_dump(exclude_none=True),
+        },
+        request=request,
+        http_status_code=200,
+    )
+    return detail
+
+
+@router.put("/courses/{course_slug}/schedule", response_model=AdminScheduleReplaceResponse)
+def admin_replace_schedule_endpoint(
+    course_slug: str,
+    request: Request,
+    body: AdminReplaceScheduleRequest,
+    admin: dict = Depends(get_current_admin),
+) -> AdminScheduleReplaceResponse:
+    """Replace all daily schedule days for a course."""
+    _require_mutation_role(admin)
+    try:
+        count = replace_admin_course_schedule(course_slug, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    write_admin_audit_log(
+        admin_id=str(admin["sub"]),
+        action="UPDATE_COURSE",
+        resource_type="course",
+        resource_id=course_slug,
+        details={"schedule_days": count},
+        request=request,
+        http_status_code=200,
+    )
+    return AdminScheduleReplaceResponse(
+        ok=True,
+        course_slug=course_slug,
+        day_count=count,
+    )
+
+
+@router.put("/courses/{course_slug}/weeks", response_model=AdminCourseDetailResponse)
+def admin_replace_weeks_endpoint(
+    course_slug: str,
+    request: Request,
+    body: AdminReplaceWeeksRequest,
+    admin: dict = Depends(get_current_admin),
+) -> AdminCourseDetailResponse:
+    """Replace week/lesson catalog tree for storefront."""
+    _require_mutation_role(admin)
+    try:
+        detail = replace_admin_course_weeks(course_slug, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    write_admin_audit_log(
+        admin_id=str(admin["sub"]),
+        action="UPDATE_COURSE",
+        resource_type="course",
+        resource_id=course_slug,
+        details={"week_count": len(body.weeks)},
+        request=request,
+        http_status_code=200,
+    )
+    return detail
+
+
+@router.patch("/courses/{course_slug}/product", response_model=AdminCourseDetailResponse)
+def admin_upsert_product_endpoint(
+    course_slug: str,
+    request: Request,
+    body: AdminUpsertProductRequest,
+    admin: dict = Depends(get_current_admin),
+) -> AdminCourseDetailResponse:
+    """Upsert Stripe product/price row in course_products."""
+    _require_mutation_role(admin)
+    try:
+        detail = upsert_admin_course_product(course_slug, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    write_admin_audit_log(
+        admin_id=str(admin["sub"]),
+        action="UPDATE_COURSE",
+        resource_type="course",
+        resource_id=course_slug,
+        details={
+            "provider_price_id": body.provider_price_id,
+            "unit_amount_cents": body.unit_amount_cents,
+        },
+        request=request,
+        http_status_code=200,
+    )
+    return detail
 
 
 @router.get("/users/{user_id}", response_model=AdminUserDetailResponse)

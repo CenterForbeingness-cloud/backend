@@ -346,10 +346,89 @@ class AdminCourseItem(BaseModel):
     price_id: Optional[str] = None
     is_published: bool = True
     bundle_included_slugs: list[str] = Field(default_factory=list)
+    week_count: int = 0
+    day_count: int = 0
 
 
 class AdminCoursesResponse(BaseModel):
     courses: list[AdminCourseItem]
+
+
+class AdminCourseLesson(BaseModel):
+    lesson_number: int = Field(..., gt=0)
+    title: str = Field(..., min_length=1, max_length=200)
+    content_ref: Optional[str] = Field(default=None, max_length=255)
+
+
+class AdminCourseWeek(BaseModel):
+    week_number: int = Field(..., gt=0)
+    title: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+    lessons: list[AdminCourseLesson] = Field(default_factory=list)
+
+
+class AdminScheduleDayFull(BaseModel):
+    day_number: int = Field(..., gt=0)
+    day_title: Optional[str] = Field(default=None, max_length=200)
+    content: str = Field(..., min_length=1)
+
+
+class AdminCourseProduct(BaseModel):
+    provider_product_id: Optional[str] = None
+    provider_price_id: Optional[str] = None
+    unit_amount_cents: Optional[int] = Field(default=None, ge=0)
+    currency: str = "usd"
+    is_active: bool = True
+    price_source: str = "none"
+
+
+class AdminCourseDetailResponse(BaseModel):
+    course_slug: str
+    title: str
+    description: Optional[str] = None
+    is_published: bool = False
+    week_count: int = 0
+    day_count: int = 0
+    weeks: list[AdminCourseWeek] = Field(default_factory=list)
+    schedule_days: list[AdminScheduleDayFull] = Field(default_factory=list)
+    product: Optional[AdminCourseProduct] = None
+    bundle_included_slugs: list[str] = Field(default_factory=list)
+    env_price_id: Optional[str] = None
+
+
+class AdminCreateCourseRequest(BaseModel):
+    course_slug: str = Field(..., min_length=1, max_length=80, pattern=r"^[a-z0-9\-]+$")
+    title: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+    is_published: bool = False
+
+
+class AdminUpdateCourseRequest(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = None
+    is_published: Optional[bool] = None
+
+
+class AdminReplaceScheduleRequest(BaseModel):
+    days: list[AdminScheduleDayFull] = Field(..., min_length=1)
+
+
+class AdminReplaceWeeksRequest(BaseModel):
+    weeks: list[AdminCourseWeek] = Field(default_factory=list)
+
+
+class AdminUpsertProductRequest(BaseModel):
+    provider_product_id: str = Field(..., min_length=1, max_length=120)
+    provider_price_id: str = Field(..., min_length=1, max_length=120)
+    unit_amount_cents: int = Field(..., ge=0)
+    currency: str = Field(default="usd", min_length=3, max_length=3)
+    is_active: bool = True
+
+
+class AdminScheduleReplaceResponse(BaseModel):
+    ok: bool
+    course_slug: str
+    day_count: int
 
 
 class AdminEventCount(BaseModel):
