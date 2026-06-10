@@ -57,10 +57,14 @@ from app.config import (
 from app.analytics import track, track_purchase_completed
 from app.models import (
     AdminInviteBeginResponse,
+    AdminForgotPasswordRequest,
+    AdminForgotPasswordResponse,
     AdminInviteCompleteRequest,
     AdminInviteStatusResponse,
     AdminInviteTokenRequest,
     AdminLoginRequest,
+    AdminPasswordResetCompleteRequest,
+    AdminPasswordResetStatusResponse,
     AdminTokenResponse,
     AdminTOTPVerifyRequest,
     AnalyticsEventsRequest,
@@ -118,6 +122,15 @@ from app.admin_access import enforce_admin_ip, is_admin_path
 from app.admin_api import router as admin_router, write_admin_audit_log
 from app.admin_auth import admin_login, verify_totp as verify_admin_totp
 from app.admin_invite import begin_invite_setup, complete_invite_setup, invite_status
+from app.admin_password_reset import (
+    complete_password_reset,
+    request_password_reset,
+    reset_status,
+)
+from app.email_service import (
+    build_admin_password_reset_url,
+    send_admin_password_reset_email,
+)
 from app.rate_limit import AUTH_LIMIT, BILLING_LIMIT, CHAT_LIMIT, SESSIONS_LIMIT, limiter
 from app.voice import (
     assert_voice_enabled,
@@ -1412,3 +1425,58 @@ def admin_invite_complete_endpoint(
     if not ok:
         raise HTTPException(status_code=400, detail=error or "Setup failed")
     return {"ok": True, "message": "Account ready. You can sign in with your password and authenticator app."}
+
+
+@app.post("/admin/auth/forgot-password", response_model=AdminForgotPasswordResponse)
+@AUTH_LIMIT
+def admin_forgot_password_endpoint(
+    request: Request, req: AdminForgotPasswordRequest
+) -> AdminForgotPasswordResponse:
+    """Request password reset email. Always returns success (no email enumeration)."""
+    admin_id, plain_token, found = request_password_reset(req.email)
+    if found and admin_id and plain_token:
+        reset_url = build_admin_password_reset_url(plain_token)
+        send_admin_password_reset_email(req.email.strip().lower(), reset_url)
+        logger.info("Admin password reset requested for %s", req.email.strip().lower())
+    return AdminForgotPasswordResponse()
+
+
+@app.post("/admin/auth/reset-password/status", response_model=AdminPasswordResetStatusResponse)
+@AUTH_LIMIT
+def admin_reset_password_status_endpoint(
+    request: Request, req: AdminInviteTokenRequest
+) -> AdminPasswordResetStatusResponse:
+    """Validate reset token before reset UI."""
+    data, error = reset_status(req.token)
+    if error or not data:
+        raise HTTPException(status_code=400, detail=error or "Invalid reset link")
+    return AdminPasswordResetStatusResponse(**data)
+
+
+@app.post("/admin/auth/reset-password/complete")
+@AUTH_LIMIT
+def admin_reset_password_complete_endpoint(
+    request: Request, req: AdminPasswordResetCompleteRequest
+) -> dict:
+    """Set new password; requires existing authenticator code."""
+    ok, error, admin_id = complete_password_reset(
+        req.token, req.password, req.totp_code
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail=error or "Reset failed")
+
+    if admin_id:
+        write_admin_audit_log(
+            admin_id=admin_id,
+            action="ADMIN_PASSWORD_CHANGE",
+            resource_type="admin",
+            resource_id=admin_id,
+            details={"via": "password_reset_link"},
+            request=request,
+            http_status_code=200,
+        )
+
+    return {
+        "ok": True,
+        "message": "Password updated. Sign in with your new password and authenticator app.",
+    }

@@ -543,6 +543,36 @@ class AdminInviteCompleteRequest(BaseModel):
     totp_code: str = Field(..., pattern="^[0-9]{6}$")
 
 
+class AdminForgotPasswordRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+
+
+class AdminForgotPasswordResponse(BaseModel):
+    ok: bool = True
+    message: str = (
+        "If that email is registered as an admin, we sent a password reset link."
+    )
+
+
+class AdminPasswordResetStatusResponse(BaseModel):
+    email_hint: str
+    role: Optional[str] = None
+
+
+class AdminPasswordResetCompleteRequest(BaseModel):
+    token: str = Field(..., min_length=16, max_length=256)
+    password: str = Field(..., min_length=8, max_length=128)
+    totp_code: str = Field(..., pattern="^[0-9]{6}$")
+
+
+class AdminSendPasswordResetResponse(BaseModel):
+    ok: bool
+    admin_id: str
+    email: str
+    email_sent: bool = False
+    reset_link: Optional[str] = None
+
+
 # Backward-compatible aliases (legacy direct-create flow removed)
 class AdminCreateStaffRequest(AdminInviteStaffRequest):
     pass
