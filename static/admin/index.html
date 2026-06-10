@@ -143,6 +143,34 @@
           <input id="totp" type="text" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" />
         </div>
         <button id="loginBtn" type="button">Sign in</button>
+        <button type="button" class="linkish" id="forgotPasswordBtn">Forgot password?</button>
+      </div>
+    </div>
+
+    <div id="forgotView" class="hidden">
+      <h1>Reset password</h1>
+      <p class="sub">We'll email a link if this address is registered as an admin.</p>
+      <div id="forgotMsg"></div>
+      <div class="card">
+        <label for="forgotEmail">Email</label>
+        <input id="forgotEmail" type="email" autocomplete="username" />
+        <button type="button" id="forgotSubmitBtn">Send reset link</button>
+        <button type="button" class="linkish" id="forgotToLoginBtn">Back to sign in</button>
+      </div>
+    </div>
+
+    <div id="resetView" class="hidden">
+      <h1>Choose a new password</h1>
+      <p class="sub" id="resetIntro">Enter a new password and your authenticator code.</p>
+      <div id="resetMsg"></div>
+      <div class="card">
+        <p class="sub" id="resetEmailLine"></p>
+        <label for="resetPassword">New password (8+ characters)</label>
+        <input id="resetPassword" type="password" autocomplete="new-password" />
+        <label for="resetTotp">Authenticator code (6 digits)</label>
+        <input id="resetTotp" type="text" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" />
+        <button type="button" id="resetCompleteBtn">Update password</button>
+        <button type="button" class="linkish" id="resetToLoginBtn">Back to sign in</button>
       </div>
     </div>
 
@@ -276,8 +304,11 @@
     const $ = (id) => document.getElementById(id);
     const loginView = $("loginView");
     const setupView = $("setupView");
+    const forgotView = $("forgotView");
+    const resetView = $("resetView");
     const appView = $("appView");
     let setupToken = "";
+    let resetToken = "";
     const totpBlock = $("totpBlock");
     let pendingEmail = "";
     let me = { role: "viewer", email: "", admin_id: "" };
@@ -338,14 +369,24 @@
       }
     }
 
-    function inviteTokenFromUrl() {
+    function authTokenFromUrl(name) {
       const params = new URLSearchParams(window.location.search);
-      return params.get("setup_token") || "";
+      return params.get(name) || "";
+    }
+
+    function inviteTokenFromUrl() {
+      return authTokenFromUrl("setup_token");
+    }
+
+    function resetTokenFromUrl() {
+      return authTokenFromUrl("reset_token");
     }
 
     async function showSetup(token) {
       setupToken = token;
       loginView.classList.add("hidden");
+      forgotView.classList.add("hidden");
+      resetView.classList.add("hidden");
       appView.classList.add("hidden");
       setupView.classList.remove("hidden");
       showMsg($("setupMsg"), "", true);
@@ -373,6 +414,8 @@
     async function showApp() {
       loginView.classList.add("hidden");
       setupView.classList.add("hidden");
+      forgotView.classList.add("hidden");
+      resetView.classList.add("hidden");
       appView.classList.remove("hidden");
       try {
         await refreshMe();
@@ -396,11 +439,46 @@
       me = { role: "viewer", email: "", admin_id: "" };
       appView.classList.add("hidden");
       setupView.classList.add("hidden");
+      forgotView.classList.add("hidden");
+      resetView.classList.add("hidden");
       loginView.classList.remove("hidden");
       totpBlock.classList.add("hidden");
       pendingEmail = "";
       selectedUserId = null;
+      setupToken = "";
+      resetToken = "";
       $("userDetail").classList.add("hidden");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+
+    function showForgot() {
+      appView.classList.add("hidden");
+      setupView.classList.add("hidden");
+      resetView.classList.add("hidden");
+      loginView.classList.add("hidden");
+      forgotView.classList.remove("hidden");
+      showMsg($("forgotMsg"), "", true);
+      const email = $("email").value.trim();
+      if (email) $("forgotEmail").value = email;
+    }
+
+    async function showReset(token) {
+      resetToken = token;
+      appView.classList.add("hidden");
+      setupView.classList.add("hidden");
+      forgotView.classList.add("hidden");
+      loginView.classList.add("hidden");
+      resetView.classList.remove("hidden");
+      showMsg($("resetMsg"), "", true);
+      try {
+        const status = await api("/admin/auth/reset-password/status", {
+          method: "POST",
+          body: JSON.stringify({ token }),
+        });
+        $("resetEmailLine").textContent = `Account: ${status.email_hint}`;
+      } catch (e) {
+        showMsg($("resetMsg"), e.message, false);
+      }
     }
 
     $("setupCompleteBtn").addEventListener("click", async () => {
@@ -423,6 +501,49 @@
     $("setupToLoginBtn").addEventListener("click", () => {
       window.history.replaceState({}, "", window.location.pathname);
       showLogin();
+    });
+
+    $("forgotPasswordBtn").addEventListener("click", showForgot);
+    $("forgotToLoginBtn").addEventListener("click", showLogin);
+    $("resetToLoginBtn").addEventListener("click", showLogin);
+
+    $("forgotSubmitBtn").addEventListener("click", async () => {
+      const email = $("forgotEmail").value.trim();
+      if (!email) {
+        showMsg($("forgotMsg"), "Enter your email.", false);
+        return;
+      }
+      try {
+        await api("/admin/auth/forgot-password", {
+          method: "POST",
+          body: JSON.stringify({ email }),
+        });
+        showMsg(
+          $("forgotMsg"),
+          "If that email is registered, we sent a reset link. Check your inbox.",
+          true
+        );
+      } catch (e) {
+        showMsg($("forgotMsg"), e.message, false);
+      }
+    });
+
+    $("resetCompleteBtn").addEventListener("click", async () => {
+      const password = $("resetPassword").value;
+      const totp = $("resetTotp").value.trim();
+      if (!resetToken) return;
+      try {
+        await api("/admin/auth/reset-password/complete", {
+          method: "POST",
+          body: JSON.stringify({ token: resetToken, password, totp_code: totp }),
+        });
+        showMsg($("resetMsg"), "Password updated. Sign in below.", true);
+        window.history.replaceState({}, "", window.location.pathname);
+        resetToken = "";
+        setTimeout(showLogin, 1200);
+      } catch (e) {
+        showMsg($("resetMsg"), e.message, false);
+      }
     });
 
     $("loginBtn").addEventListener("click", async () => {
@@ -1018,7 +1139,8 @@
               <td>${s.is_active ? "active" : "inactive"} · ${s.totp_enabled ? "2FA on" : "<span class=\"pill\">pending setup</span>"}</td>
               <td>${canEdit ? `
                 <button type="button" onclick="saveRole('${s.admin_id}', '${s.email.replace(/'/g, "\\'")}')">Save role</button>
-                ${self ? "" : `<button type="button" class="secondary" onclick="toggleActive('${s.admin_id}', '${s.email.replace(/'/g, "\\'")}', ${!s.is_active})">${s.is_active ? "Deactivate" : "Activate"}</button>
+                ${self ? "" : `<button type="button" class="secondary" onclick="sendPasswordReset('${s.admin_id}', '${s.email.replace(/'/g, "\\'")}')">Send password reset</button>
+                <button type="button" class="secondary" onclick="toggleActive('${s.admin_id}', '${s.email.replace(/'/g, "\\'")}', ${!s.is_active})">${s.is_active ? "Deactivate" : "Activate"}</button>
                 <button type="button" class="danger" onclick="deleteAdmin('${s.admin_id}', '${s.email.replace(/'/g, "\\'")}')">Delete</button>`}
               ` : ""}</td>
             </tr>`;
@@ -1026,6 +1148,29 @@
         </tbody></table>`;
       } catch (e) {
         box.innerHTML = `<div class="msg err">${e.message}</div>`;
+      }
+    }
+
+    async function sendPasswordReset(adminId, email) {
+      if (!confirm(`Send password reset email to ${email}?`)) return;
+      try {
+        const data = await api(
+          "/admin/staff/" + encodeURIComponent(adminId) + "/send-password-reset",
+          { method: "POST" }
+        );
+        if (data.email_sent) {
+          showMsg($("appMsg"), `Password reset email sent to ${email}.`, true);
+        } else if (data.reset_link) {
+          showMsg(
+            $("appMsg"),
+            `SMTP not configured. Reset link (copy now): ${data.reset_link}`,
+            true
+          );
+        } else {
+          showMsg($("appMsg"), "Password reset created.", true);
+        }
+      } catch (e) {
+        showMsg($("appMsg"), e.message, false);
       }
     }
 
@@ -1212,6 +1357,11 @@
       const invite = inviteTokenFromUrl();
       if (invite) {
         await showSetup(invite);
+        return;
+      }
+      const reset = resetTokenFromUrl();
+      if (reset) {
+        await showReset(reset);
         return;
       }
       if (!token()) return;

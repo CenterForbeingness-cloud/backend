@@ -24,7 +24,13 @@ from app.admin_auth import (
     verify_admin_token,
 )
 from app.admin_invite import create_admin_invite
-from app.email_service import build_admin_invite_url, send_admin_invite_email
+from app.admin_password_reset import request_password_reset_by_admin_id
+from app.email_service import (
+    build_admin_invite_url,
+    build_admin_password_reset_url,
+    send_admin_invite_email,
+    send_admin_password_reset_email,
+)
 from app.config import FAIR_USE_LIMIT, SUPABASE_DB_URL, logger
 from app.user_profile import get_user_profile
 from app.daily_schedule import validate_course_slug
@@ -70,6 +76,7 @@ from app.models import (
     AdminPurchaseRow,
     AdminRevokeEntitlementRequest,
     AdminScheduleHealthResponse,
+    AdminSendPasswordResetResponse,
     AdminStaffListResponse,
     AdminStaffMember,
     AdminDeleteStaffResponse,
@@ -667,6 +674,40 @@ def admin_invite_staff(
         role=body.role,
         email_sent=email_sent,
         invite_link=None if email_sent else invite_link,
+    )
+
+
+@router.post(
+    "/staff/{admin_id}/send-password-reset",
+    response_model=AdminSendPasswordResetResponse,
+)
+def admin_send_password_reset(
+    admin_id: str,
+    request: Request,
+    admin: dict = Depends(get_current_admin),
+) -> AdminSendPasswordResetResponse:
+    """Owner sends password reset link to an existing admin (owner only)."""
+    _require_owner_role(admin)
+
+    if str(admin.get("sub")) == admin_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Use forgot password on the login page for your own account",
+        )
+
+    email, plain_token, error = request_password_reset_by_admin_id(admin_id)
+    if error or not email or not plain_token:
+        raise HTTPException(status_code=400, detail=error or "Reset failed")
+
+    reset_link = build_admin_password_reset_url(plain_token)
+    email_sent, _send_err = send_admin_password_reset_email(email, reset_link)
+
+    return AdminSendPasswordResetResponse(
+        ok=True,
+        admin_id=admin_id,
+        email=email,
+        email_sent=email_sent,
+        reset_link=None if email_sent else reset_link,
     )
 
 

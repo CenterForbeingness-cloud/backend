@@ -114,3 +114,66 @@ This link expires in 72 hours. If you did not expect this email, ignore it.
 def build_admin_invite_url(plain_token: str) -> str:
     base = ADMIN_UI_URL.rstrip("/")
     return f"{base}?setup_token={plain_token}"
+
+
+def build_admin_password_reset_url(plain_token: str) -> str:
+    base = ADMIN_UI_URL.rstrip("/")
+    return f"{base}?reset_token={plain_token}"
+
+
+def send_admin_password_reset_email(
+    to_email: str,
+    reset_url: str,
+) -> tuple[bool, Optional[str]]:
+    """Send password reset email. Returns (sent, error_or_none)."""
+    subject = "Reset your Sentient Admin password"
+    body = f"""Hello,
+
+We received a request to reset the password for your Sentient admin account.
+
+Open this link to choose a new password (you will need your authenticator app):
+
+{reset_url}
+
+This link expires in 24 hours. If you did not request this, ignore this email.
+
+— Sentient Ops
+"""
+    html = f"""<p>Hello,</p>
+<p>We received a request to reset the password for your Sentient admin account.</p>
+<p><a href="{reset_url}">Reset your password</a></p>
+<p>Or copy this URL:<br/><code>{reset_url}</code></p>
+<p>You will need your existing authenticator app (6-digit code) to finish.</p>
+<p>This link expires in 24 hours.</p>
+<p>— Sentient Ops</p>"""
+
+    if not SMTP_HOST or not ADMIN_INVITE_FROM_EMAIL:
+        logger.warning(
+            "Admin password reset email not sent (SMTP not configured). Reset URL for %s: %s",
+            to_email,
+            reset_url,
+        )
+        return False, None
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = ADMIN_INVITE_FROM_EMAIL
+    msg["To"] = to_email.strip()
+    msg.set_content(body)
+    msg.add_alternative(html, subtype="html")
+
+    if not SMTP_PASSWORD:
+        logger.warning(
+            "Admin password reset email not sent (SMTP_PASSWORD missing). Reset URL for %s: %s",
+            to_email,
+            reset_url,
+        )
+        return False, "SMTP_PASSWORD not configured"
+
+    try:
+        _send_via_smtp(msg)
+        logger.info("Admin password reset email sent to %s", to_email)
+        return True, None
+    except Exception as exc:
+        logger.exception("Failed to send password reset email to %s: %s", to_email, exc)
+        return False, str(exc)
