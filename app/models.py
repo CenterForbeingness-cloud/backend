@@ -382,6 +382,21 @@ class AdminCourseProduct(BaseModel):
     price_source: str = "none"
 
 
+class AdminCourseRagStatus(BaseModel):
+    text_files: int = 0
+    audio_files: int = 0
+    last_text_manifest_at: Optional[str] = None
+    last_audio_manifest_at: Optional[str] = None
+    text_chunk_count: Optional[int] = None
+    audio_chunk_count: Optional[int] = None
+
+
+class AdminCourseVoiceStatus(BaseModel):
+    configured: bool = False
+    provider: Optional[str] = None
+    voice_id_hint: Optional[str] = None
+
+
 class AdminCourseDetailResponse(BaseModel):
     course_slug: str
     title: str
@@ -394,6 +409,13 @@ class AdminCourseDetailResponse(BaseModel):
     product: Optional[AdminCourseProduct] = None
     bundle_included_slugs: list[str] = Field(default_factory=list)
     env_price_id: Optional[str] = None
+    rag_status: AdminCourseRagStatus = Field(default_factory=AdminCourseRagStatus)
+    voice_status: AdminCourseVoiceStatus = Field(default_factory=AdminCourseVoiceStatus)
+
+
+class AdminUpsertVoiceRequest(BaseModel):
+    voice_id: str = Field(..., min_length=1, max_length=120)
+    provider: str = Field(default="elevenlabs", min_length=1, max_length=40)
 
 
 class AdminCreateCourseRequest(BaseModel):

@@ -14,6 +14,8 @@ from app.models import (
     AdminCourseItem,
     AdminCourseLesson,
     AdminCourseProduct,
+    AdminCourseRagStatus,
+    AdminCourseVoiceStatus,
     AdminCourseWeek,
     AdminCreateCourseRequest,
     AdminReplaceScheduleRequest,
@@ -21,7 +23,9 @@ from app.models import (
     AdminScheduleDayFull,
     AdminUpdateCourseRequest,
     AdminUpsertProductRequest,
+    AdminUpsertVoiceRequest,
 )
+from app.rag_status import get_course_rag_status
 
 
 def _require_db() -> None:
@@ -200,6 +204,12 @@ def get_admin_course_detail(course_slug: str) -> Optional[AdminCourseDetailRespo
             )
 
     weeks = [weeks_by_num[n] for n in sorted(weeks_by_num)]
+    rag = get_course_rag_status(course_slug)
+    voice_hint = None
+    if rag.voice_id:
+        vid = rag.voice_id.strip()
+        voice_hint = f"…{vid[-4:]}" if len(vid) > 4 else vid
+
     return AdminCourseDetailResponse(
         course_slug=course_slug,
         title=title,
@@ -212,6 +222,19 @@ def get_admin_course_detail(course_slug: str) -> Optional[AdminCourseDetailRespo
         product=product,
         bundle_included_slugs=list(BUNDLE_INCLUDED_COURSES.get(course_slug, ())),
         env_price_id=env_price,
+        rag_status=AdminCourseRagStatus(
+            text_files=rag.text_files,
+            audio_files=rag.audio_files,
+            last_text_manifest_at=rag.last_text_manifest_at,
+            last_audio_manifest_at=rag.last_audio_manifest_at,
+            text_chunk_count=rag.text_chunk_count,
+            audio_chunk_count=rag.audio_chunk_count,
+        ),
+        voice_status=AdminCourseVoiceStatus(
+            configured=rag.voice_configured,
+            provider=rag.voice_provider,
+            voice_id_hint=voice_hint,
+        ),
     )
 
 
@@ -400,6 +423,47 @@ def upsert_admin_course_product(
                 body.currency.strip().lower() or "usd",
                 body.unit_amount_cents,
                 body.is_active,
+            ),
+        )
+
+    detail = get_admin_course_detail(course_slug)
+    if detail is None:
+        raise ValueError(f"Course not found: {course_slug}")
+    return detail
+
+
+def upsert_admin_course_voice(
+    course_slug: str,
+    body: AdminUpsertVoiceRequest,
+) -> AdminCourseDetailResponse:
+    _require_db()
+    validate_course_slug(course_slug)
+
+    from app.db import db_connection
+
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM public.courses WHERE course_slug = %s",
+            (course_slug,),
+        )
+        if cur.fetchone() is None:
+            raise ValueError(f"Course not found: {course_slug}")
+
+        cur.execute(
+            """
+            INSERT INTO public.course_voice_profiles (
+                course_slug, provider, voice_id, updated_at
+            )
+            VALUES (%s, %s, %s, timezone('utc', now()))
+            ON CONFLICT (course_slug) DO UPDATE SET
+                provider = EXCLUDED.provider,
+                voice_id = EXCLUDED.voice_id,
+                updated_at = timezone('utc', now())
+            """,
+            (
+                course_slug,
+                body.provider.strip().lower() or "elevenlabs",
+                body.voice_id.strip(),
             ),
         )
 
