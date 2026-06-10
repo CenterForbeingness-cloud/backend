@@ -43,6 +43,7 @@ from app.admin_courses import (
     replace_admin_course_weeks,
     update_admin_course,
     upsert_admin_course_product,
+    upsert_admin_course_voice,
 )
 from app.admin_ops import get_admin_analytics_summary, get_admin_schedule_health
 from app.models import (
@@ -59,6 +60,7 @@ from app.models import (
     AdminScheduleReplaceResponse,
     AdminUpdateCourseRequest,
     AdminUpsertProductRequest,
+    AdminUpsertVoiceRequest,
     AdminInviteStaffRequest,
     AdminInviteStaffResponse,
     AdminEntitlementMutationResponse,
@@ -946,6 +948,39 @@ def admin_upsert_product_endpoint(
         details={
             "provider_price_id": body.provider_price_id,
             "unit_amount_cents": body.unit_amount_cents,
+        },
+        request=request,
+        http_status_code=200,
+    )
+    return detail
+
+
+@router.patch("/courses/{course_slug}/voice", response_model=AdminCourseDetailResponse)
+def admin_upsert_voice_endpoint(
+    course_slug: str,
+    request: Request,
+    body: AdminUpsertVoiceRequest,
+    admin: dict = Depends(get_current_admin),
+) -> AdminCourseDetailResponse:
+    """Set ElevenLabs (or other) voice_id for course TTS."""
+    _require_mutation_role(admin)
+    try:
+        detail = upsert_admin_course_voice(course_slug, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    write_admin_audit_log(
+        admin_id=str(admin["sub"]),
+        action="UPDATE_COURSE",
+        resource_type="course",
+        resource_id=course_slug,
+        details={
+            "voice_provider": body.provider,
+            "voice_id_hint": f"…{body.voice_id.strip()[-4:]}"
+            if len(body.voice_id.strip()) > 4
+            else body.voice_id.strip(),
         },
         request=request,
         http_status_code=200,

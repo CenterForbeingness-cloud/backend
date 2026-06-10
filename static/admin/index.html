@@ -773,6 +773,8 @@
     function renderCourseEditor(c) {
       const edit = canMutate();
       const prod = c.product || {};
+      const rag = c.rag_status || {};
+      const voice = c.voice_status || {};
       const weeksJson = JSON.stringify(c.weeks || [], null, 2);
       const box = $("courseEditor");
       box.innerHTML = `
@@ -827,8 +829,33 @@
         </div>
 
         <div class="editor-section">
-          <h3>RAG corpus</h3>
-          <p class="sub" style="margin-top:0;">Track C — upload not in admin yet. Add text under <code>rag/raw/courses/${esc(c.course_slug)}/</code> and run <code>embed.py</code>.</p>
+          <h3>RAG corpus (Track C)</h3>
+          <p class="sub" style="margin-top:0;">
+            Text: <strong>${rag.text_files ?? 0}</strong> file(s) on disk ·
+            Audio: <strong>${rag.audio_files ?? 0}</strong> file(s) in <code>audio/</code><br/>
+            Last text manifest: ${esc(rag.last_text_manifest_at || "—")} ·
+            Last audio manifest: ${esc(rag.last_audio_manifest_at || "—")}<br/>
+            Chunks indexed: text ${rag.text_chunk_count ?? "—"} · audio ${rag.audio_chunk_count ?? "—"}
+          </p>
+          <p class="sub" style="margin-top:8px;">
+            Ops: drop files under <code>rag/raw/courses/${esc(c.course_slug)}/</code> then run
+            <code>embed.py</code> (text) or <code>ingest_audio.py --course ${esc(c.course_slug)}</code> (audio).
+            See <code>docs/TRACK_C_LAUNCH_CHECKLIST.md</code>.
+          </p>
+        </div>
+
+        <div class="editor-section">
+          <h3>Voice profile (Track C)</h3>
+          <p class="sub" style="margin-top:0;">
+            ${voice.configured
+              ? `Configured · provider <code>${esc(voice.provider || "elevenlabs")}</code> · id ${esc(voice.voice_id_hint || "")}`
+              : "Not configured — TTS falls back to <code>ELEVENLABS_VOICE_ID_DEFAULT</code> env."}
+          </p>
+          <div class="row">
+            <div><label>Provider</label><input id="edVoiceProvider" value="${esc(voice.provider || "elevenlabs")}" ${edit ? "" : "disabled"} /></div>
+            <div style="flex:2;"><label>Voice ID (ElevenLabs)</label><input id="edVoiceId" placeholder="paste voice_id from ElevenLabs" ${edit ? "" : "disabled"} /></div>
+          </div>
+          ${edit ? `<button type="button" id="saveVoiceBtn">Save voice profile</button>` : ""}
         </div>`;
 
       if (edit) {
@@ -836,6 +863,7 @@
         $("saveScheduleBtn").onclick = () => saveCourseSchedule(c.course_slug);
         $("saveWeeksBtn").onclick = () => saveCourseWeeks(c.course_slug);
         $("saveProductBtn").onclick = () => saveCourseProduct(c.course_slug);
+        $("saveVoiceBtn").onclick = () => saveCourseVoice(c.course_slug);
       }
     }
 
@@ -917,6 +945,27 @@
           }),
         });
         showMsg($("appMsg"), "Stripe product saved.", true);
+        openCourseEditor(slug);
+      } catch (e) {
+        showMsg($("appMsg"), e.message, false);
+      }
+    }
+
+    async function saveCourseVoice(slug) {
+      const voice_id = $("edVoiceId").value.trim();
+      if (!voice_id) {
+        showMsg($("appMsg"), "Voice ID is required.", false);
+        return;
+      }
+      try {
+        await api("/admin/courses/" + encodeURIComponent(slug) + "/voice", {
+          method: "PATCH",
+          body: JSON.stringify({
+            voice_id,
+            provider: $("edVoiceProvider").value.trim().toLowerCase() || "elevenlabs",
+          }),
+        });
+        showMsg($("appMsg"), "Voice profile saved.", true);
         openCourseEditor(slug);
       } catch (e) {
         showMsg($("appMsg"), e.message, false);

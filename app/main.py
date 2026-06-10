@@ -465,6 +465,14 @@ def health_launch_gates(strict_live: bool = False) -> dict:
     return evaluate_launch_gates(strict_live=strict_live)
 
 
+@app.get("/health/voice-gates")
+def health_voice_gates(course_slug: Optional[str] = None) -> dict:
+    """Track C readiness — voice/RAG env + optional corpus hints (no secret values)."""
+    from app.voice_gates import evaluate_voice_gates
+
+    return evaluate_voice_gates(course_slug=course_slug)
+
+
 @app.get("/billing/return/success", response_class=HTMLResponse)
 def billing_return_success() -> str:
     return _checkout_return_page(
