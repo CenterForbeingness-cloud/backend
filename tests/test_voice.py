@@ -29,3 +29,19 @@ def test_resolve_voice_id_missing_config(monkeypatch):
 def test_check_voice_quota_skips_when_cap_zero(monkeypatch):
     monkeypatch.setattr(voice, "VOICE_DAILY_SECONDS_CAP", 0)
     voice.check_voice_quota("00000000-0000-0000-0000-000000000001", 120.0)
+
+
+@pytest.mark.parametrize(
+    ("mime_type", "filename", "expected_ext"),
+    [
+        ("audio/mp4", "utterance.m4a", "m4a"),
+        ("audio/mp4", None, "m4a"),
+        ("audio/m4a", None, "m4a"),
+        ("audio/webm", "utterance.webm", "webm"),
+        ("audio/wav", None, "wav"),
+        ("audio/mpeg", None, "mp3"),
+    ],
+)
+def test_resolve_whisper_file_format(mime_type, filename, expected_ext):
+    ext, _ = voice._resolve_whisper_file_format(mime_type, filename)
+    assert ext == expected_ext

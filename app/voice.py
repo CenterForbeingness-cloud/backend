@@ -26,6 +26,41 @@ from app.config import (
 
 _voice_schema_bootstrapped = False
 
+_WHISPER_EXTENSIONS = frozenset(
+    {"flac", "m4a", "mp3", "mp4", "mpeg", "mpga", "oga", "ogg", "wav", "webm"}
+)
+
+
+def _resolve_whisper_file_format(
+    mime_type: str,
+    filename: Optional[str] = None,
+) -> tuple[str, str]:
+    """Return (extension, mime) suitable for OpenAI Whisper from upload metadata."""
+    if filename and "." in filename:
+        ext = filename.rsplit(".", 1)[-1].lower()
+        if ext == "mp4":
+            return "m4a", "audio/m4a"
+        if ext in _WHISPER_EXTENSIONS:
+            return ext, f"audio/{ext}" if ext not in {"mp3", "mpeg", "mpga"} else "audio/mpeg"
+
+    mime = (mime_type or "").split(";")[0].strip().lower()
+    if mime in {"audio/m4a", "audio/x-m4a", "audio/mp4"}:
+        return "m4a", "audio/m4a"
+    if "m4a" in mime or mime == "audio/mp4":
+        return "m4a", "audio/m4a"
+    if "webm" in mime:
+        return "webm", mime or "audio/webm"
+    if "wav" in mime:
+        return "wav", mime or "audio/wav"
+    if "mpeg" in mime or "mp3" in mime:
+        return "mp3", mime or "audio/mpeg"
+    if "ogg" in mime or "oga" in mime:
+        return "ogg", mime or "audio/ogg"
+    if "flac" in mime:
+        return "flac", mime or "audio/flac"
+
+    return "webm", mime or "audio/webm"
+
 
 def assert_voice_enabled() -> None:
     if not VOICE_ENABLED:
@@ -35,27 +70,27 @@ def assert_voice_enabled() -> None:
         )
 
 
-def transcribe_audio(audio_bytes: bytes, *, mime_type: str = "audio/webm") -> Tuple[str, float]:
+def transcribe_audio(
+    audio_bytes: bytes,
+    *,
+    mime_type: str = "audio/webm",
+    filename: Optional[str] = None,
+) -> Tuple[str, float]:
     """Return (transcript, spoken_seconds_estimate)."""
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=503, detail="Speech transcription is not configured")
+    if len(audio_bytes) < 32:
+        raise HTTPException(status_code=400, detail="Audio recording too short")
 
     from openai import OpenAI
 
     client = OpenAI(api_key=OPENAI_API_KEY)
-    # OpenAI SDK accepts (filename, bytes, mime)
-    ext = "webm"
-    if "mpeg" in mime_type or "mp3" in mime_type:
-        ext = "mp3"
-    elif "wav" in mime_type:
-        ext = "wav"
-    elif "m4a" in mime_type:
-        ext = "m4a"
+    ext, whisper_mime = _resolve_whisper_file_format(mime_type, filename)
 
     try:
         result = client.audio.transcriptions.create(
             model=WHISPER_MODEL,
-            file=(f"utterance.{ext}", audio_bytes, mime_type),
+            file=(f"utterance.{ext}", audio_bytes, whisper_mime),
             response_format="verbose_json",
         )
     except Exception as exc:

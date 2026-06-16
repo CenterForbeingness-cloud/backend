@@ -589,7 +589,11 @@ async def chat_voice(
         raise HTTPException(status_code=400, detail="Empty audio upload")
 
     mime = audio.content_type or "audio/webm"
-    user_text, spoken_seconds = transcribe_audio(audio_bytes, mime_type=mime)
+    user_text, spoken_seconds = transcribe_audio(
+        audio_bytes,
+        mime_type=mime,
+        filename=audio.filename,
+    )
 
     if user_id:
         check_voice_quota(user_id, spoken_seconds)
