@@ -113,28 +113,79 @@ def transcribe_audio(
     return text, spoken_seconds
 
 
-def resolve_voice_id(course_slug: Optional[str]) -> str:
-    if course_slug and SUPABASE_DB_URL:
-        try:
-            from app.db import db_connection
+def _lookup_course_voice_id(course_slug: str) -> Optional[str]:
+    if not SUPABASE_DB_URL:
+        return None
+    try:
+        from app.db import db_connection
 
-            with db_connection() as conn, conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT voice_id FROM public.course_voice_profiles
-                    WHERE course_slug = %s
-                    """,
-                    (course_slug,),
-                )
-                row = cur.fetchone()
-                if row and row[0]:
-                    return str(row[0])
-        except Exception as exc:
-            logger.warning("course_voice_profiles lookup failed: %s", exc)
+        with db_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT voice_id FROM public.course_voice_profiles
+                WHERE course_slug = %s
+                """,
+                (course_slug,),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                return str(row[0])
+    except Exception as exc:
+        logger.warning("course_voice_profiles lookup failed for %s: %s", course_slug, exc)
+    return None
+
+
+def _lookup_any_course_voice_id() -> Optional[str]:
+    if not SUPABASE_DB_URL:
+        return None
+    try:
+        from app.db import db_connection
+
+        with db_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT voice_id FROM public.course_voice_profiles
+                WHERE voice_id IS NOT NULL AND voice_id <> ''
+                ORDER BY course_slug
+                LIMIT 1
+                """
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                return str(row[0])
+    except Exception as exc:
+        logger.warning("course_voice_profiles fallback lookup failed: %s", exc)
+    return None
+
+
+def resolve_voice_id(course_slug: Optional[str]) -> str:
+    candidates: list[str] = []
+    if course_slug:
+        candidates.append(course_slug)
+    candidates.append("week-zero-reset")
+
+    seen: set[str] = set()
+    for slug in candidates:
+        if slug in seen:
+            continue
+        seen.add(slug)
+        voice_id = _lookup_course_voice_id(slug)
+        if voice_id:
+            return voice_id
+
+    voice_id = _lookup_any_course_voice_id()
+    if voice_id:
+        return voice_id
 
     if ELEVENLABS_VOICE_ID_DEFAULT:
         return ELEVENLABS_VOICE_ID_DEFAULT
-    raise HTTPException(status_code=503, detail="Text-to-speech voice is not configured")
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "Text-to-speech voice is not configured. "
+            "Set ELEVENLABS_VOICE_ID_DEFAULT or add course_voice_profiles."
+        ),
+    )
 
 
 def synthesize_speech(text: str, *, course_slug: Optional[str]) -> Tuple[bytes, str]:
