@@ -18,6 +18,30 @@ def test_resolve_voice_id_uses_default(monkeypatch):
     assert voice.resolve_voice_id("week-zero-reset") == "voice-default-123"
 
 
+def test_resolve_voice_id_falls_back_to_launch_course(monkeypatch):
+    monkeypatch.setattr(voice, "SUPABASE_DB_URL", "postgresql://example")
+    monkeypatch.setattr(voice, "ELEVENLABS_VOICE_ID_DEFAULT", "")
+
+    def fake_lookup(slug: str):
+        return "voice-wzr" if slug == "week-zero-reset" else None
+
+    monkeypatch.setattr(voice, "_lookup_course_voice_id", fake_lookup)
+    monkeypatch.setattr(voice, "_lookup_any_course_voice_id", lambda: None)
+    assert voice.resolve_voice_id(None) == "voice-wzr"
+
+
+def test_resolve_voice_id_prefers_requested_course(monkeypatch):
+    monkeypatch.setattr(voice, "SUPABASE_DB_URL", "postgresql://example")
+    monkeypatch.setattr(voice, "ELEVENLABS_VOICE_ID_DEFAULT", "")
+
+    def fake_lookup(slug: str):
+        return {"deep-calm": "voice-dc", "week-zero-reset": "voice-wzr"}.get(slug)
+
+    monkeypatch.setattr(voice, "_lookup_course_voice_id", fake_lookup)
+    monkeypatch.setattr(voice, "_lookup_any_course_voice_id", lambda: None)
+    assert voice.resolve_voice_id("deep-calm") == "voice-dc"
+
+
 def test_resolve_voice_id_missing_config(monkeypatch):
     monkeypatch.setattr(voice, "SUPABASE_DB_URL", "")
     monkeypatch.setattr(voice, "ELEVENLABS_VOICE_ID_DEFAULT", "")
