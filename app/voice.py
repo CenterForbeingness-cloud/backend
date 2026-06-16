@@ -215,6 +215,24 @@ def synthesize_speech(text: str, *, course_slug: Optional[str]) -> Tuple[bytes, 
             resp = client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             return resp.content, "audio/mpeg"
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status in (401, 403):
+            logger.error(
+                "ElevenLabs auth failed for voice_id=%s (HTTP %s). "
+                "Check ELEVENLABS_API_KEY on the server matches the account that owns this voice.",
+                voice_id,
+                status,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "ElevenLabs rejected the API key. Update ELEVENLABS_API_KEY on Railway "
+                    "to the account that owns the cloned voice, then redeploy."
+                ),
+            ) from exc
+        logger.exception("ElevenLabs TTS failed: HTTP %s", status)
+        raise HTTPException(status_code=502, detail="Text-to-speech failed") from exc
     except Exception as exc:
         logger.exception("ElevenLabs TTS failed: %s", exc)
         raise HTTPException(status_code=502, detail="Text-to-speech failed") from exc
