@@ -243,7 +243,7 @@ Non-negotiable rules:
 
 
 def build_schedule_system_block(day: dict) -> str:
-    """System-prompt block for /chat when a daily schedule day is active."""
+    """System-prompt block for /chat when a daily schedule day is active (strict script mode)."""
     day_number = day["day_number"]
     title = (day.get("day_title") or "Practice").strip()
     content = day["content"].strip()
@@ -257,6 +257,42 @@ def build_schedule_system_block(day: dict) -> str:
     )
 
 
+_SCHEDULE_GUIDE_RULES = """\
+[Daily companion — today's focus]
+The admin notes below describe themes for this schedule day. They are guidance for you, not lines to read aloud.
+
+Rules:
+1. Coach in your own words — warm, concise, and responsive to what the user just said.
+2. Use [Additional context] from the course (RAG) when it helps teach today's themes.
+3. Personalize with the user's profile (goals, habits, patterns) when available.
+4. Stay on today's themes; do not jump ahead to a later day.
+5. Offer a short guided practice (~5–15 minutes) unless they ask for something else.
+6. When the session feels complete, remind them they can tap **Complete day** in the app.
+7. Never paste the admin notes verbatim or announce rigid step numbers unless the user asks for structure.
+"""
+
+
+def build_schedule_guide_block(day: dict) -> str:
+    """System-prompt block for guide-mode daily practice (themes + RAG, not verbatim script)."""
+    day_number = day["day_number"]
+    title = (day.get("day_title") or "Practice").strip()
+    content = day["content"].strip()
+    duration = estimate_duration_minutes(content)
+
+    return (
+        f"{_SCHEDULE_GUIDE_RULES}\n"
+        f"[TODAY'S FOCUS — Day {day_number}: {title}]\n"
+        f"(Roughly {duration} minutes if they want a full sit.)\n\n"
+        f"{content}"
+    )
+
+
+def build_schedule_context_block(day: dict, *, guide_mode: bool) -> str:
+    if guide_mode:
+        return build_schedule_guide_block(day)
+    return build_schedule_system_block(day)
+
+
 def estimate_duration_minutes(content: str) -> int:
     """Rough guided-practice length from schedule copy (spoken pacing)."""
     words = len(content.split())
@@ -264,7 +300,7 @@ def estimate_duration_minutes(content: str) -> int:
     return min(minutes, 45)
 
 
-def build_day_welcome(day: dict) -> str:
+def build_day_welcome(day: dict, *, guide_mode: bool = False) -> str:
     """
     First assistant message before the user speaks — same shape every day.
     """
@@ -277,6 +313,14 @@ def build_day_welcome(day: dict) -> str:
         headline = f"{headline}: {day_title}"
 
     duration_label = f"{duration} minute{'s' if duration != 1 else ''}"
+
+    if guide_mode:
+        return (
+            f"Welcome to {headline}.\n\n"
+            f"Today's focus is about {duration_label}. "
+            f"Tell me how you're arriving, or what you'd like from this session — "
+            f"I'll guide you from there."
+        )
 
     return (
         f"Welcome to {headline}.\n\n"

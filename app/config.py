@@ -13,6 +13,8 @@ MAX_MEMORY_MESSAGES = 8
 SCHEDULE_HISTORY_MESSAGES = int(os.getenv("SCHEDULE_HISTORY_MESSAGES", "6"))
 CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4o-mini")
 CHAT_MODEL_SCHEDULE = os.getenv("CHAT_MODEL_SCHEDULE", CHAT_MODEL)
+# Daily practice: "guide" = AI coach (profile + RAG + day themes). "script" = verbatim beats.
+SCHEDULE_MODE = os.getenv("SCHEDULE_MODE", "guide").strip().lower()
 SCHEDULE_SCRIPT_ENGINE = os.getenv("SCHEDULE_SCRIPT_ENGINE", "true").lower() in {
     "1",
     "true",

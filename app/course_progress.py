@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from app.config import SUPABASE_DB_URL, logger
+from app.config import SUPABASE_DB_URL, SCHEDULE_MODE, logger
 from app.daily_schedule import (
     build_day_welcome,
     estimate_duration_minutes,
@@ -17,6 +17,7 @@ from app.daily_schedule import (
     validate_course_slug,
 )
 from app.entitlements import is_product_only_slug
+from app.memory import record_memory_event
 
 _schema_bootstrapped = False
 
@@ -194,8 +195,7 @@ def resolve_schedule_day_number(
 
     day = get_current_day_number(user_id, course_slug)
     if day is None:
-        # Progress row missing or DB error — still run day 1 script if schedule exists
-        return 1
+        return None
     return day
 
 
@@ -219,7 +219,10 @@ def _progress_payload(
 
     payload["day_title"] = schedule_day.get("day_title")
     payload["duration_minutes"] = estimate_duration_minutes(schedule_day["content"])
-    payload["welcome_message"] = build_day_welcome(schedule_day)
+    payload["welcome_message"] = build_day_welcome(
+        schedule_day,
+        guide_mode=SCHEDULE_MODE == "guide",
+    )
     return payload
 
 
@@ -265,7 +268,14 @@ def advance_day(user_id: str, course_slug: str) -> Optional[dict]:
             row = cur.fetchone()
             if not row:
                 return None
-            return _progress_payload(course_slug, int(row[0]), max_day)
+            new_day = int(row[0])
+            record_memory_event(
+                user_id,
+                "course_day_complete",
+                f"Advanced to day {new_day} in course {course_slug}",
+                importance=4,
+            )
+            return _progress_payload(course_slug, new_day, max_day)
     except Exception as exc:
         logger.exception(
             "advance_day failed user=%s course=%s: %s",

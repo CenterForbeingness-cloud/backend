@@ -34,6 +34,7 @@ def generate_reply(
     base_script: Optional[str] = None,
     schedule_system_block: Optional[str] = None,
     profile_system_block: Optional[str] = None,
+    schedule_guide_mode: bool = False,
 ) -> str:
     system_prompt = (
         "You are a calm meditation assistant. Keep responses concise, safe, and on-brand."
@@ -49,8 +50,12 @@ def generate_reply(
         context_block = "\n\n".join(retrieved_context)
         system_prompt = f"{system_prompt}\n\n[Additional context]\n{context_block}"
 
-    temperature = 0.2 if schedule_system_block else 0.5
-    max_tokens = 280 if schedule_system_block else 300
+    temperature = (
+        0.5
+        if schedule_guide_mode
+        else (0.2 if schedule_system_block else 0.5)
+    )
+    max_tokens = 300 if schedule_guide_mode else (280 if schedule_system_block else 300)
     model = CHAT_MODEL_SCHEDULE if schedule_system_block else CHAT_MODEL
 
     if provider == "openai":
@@ -101,6 +106,7 @@ def generate_reply_stream(
     base_script: Optional[str] = None,
     schedule_system_block: Optional[str] = None,
     profile_system_block: Optional[str] = None,
+    schedule_guide_mode: bool = False,
 ):
     """Yield text deltas from the LLM (OpenAI streaming; Claude falls back to one chunk)."""
     system_prompt = (
@@ -116,8 +122,12 @@ def generate_reply_stream(
         context_block = "\n\n".join(retrieved_context)
         system_prompt = f"{system_prompt}\n\n[Additional context]\n{context_block}"
 
-    temperature = 0.2 if schedule_system_block else 0.5
-    max_tokens = 280 if schedule_system_block else 300
+    temperature = (
+        0.5
+        if schedule_guide_mode
+        else (0.2 if schedule_system_block else 0.5)
+    )
+    max_tokens = 300 if schedule_guide_mode else (280 if schedule_system_block else 300)
     model = CHAT_MODEL_SCHEDULE if schedule_system_block else CHAT_MODEL
 
     if provider == "openai":
@@ -154,5 +164,6 @@ def generate_reply_stream(
         base_script=base_script,
         schedule_system_block=schedule_system_block,
         profile_system_block=profile_system_block,
+        schedule_guide_mode=schedule_guide_mode,
     )
     yield text

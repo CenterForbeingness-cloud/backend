@@ -12,6 +12,7 @@ class ChatRequest(BaseModel):
     course_slug: Optional[str] = None
     week_number: Optional[int] = None
     day_number: Optional[int] = Field(default=None, ge=1)
+    daily_practice: bool = False
     mode: Literal["text", "voice"] = "text"
 
 
