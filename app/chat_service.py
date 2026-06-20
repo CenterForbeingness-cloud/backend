@@ -16,11 +16,12 @@ from app.config import (
     MAX_MEMORY_MESSAGES,
     RAG_TOP_K,
     SCHEDULE_HISTORY_MESSAGES,
+    SCHEDULE_MODE,
     SCHEDULE_SCRIPT_ENGINE,
     logger,
 )
 from app.course_progress import resolve_schedule_day_number, touch_course_activity
-from app.daily_schedule import build_schedule_system_block, get_schedule_day
+from app.daily_schedule import build_schedule_context_block, get_schedule_day
 from app.entitlements import check_entitlement
 from app.lesson_script import cached_lesson_beats, coach_reply
 from app.lesson_state import get_beat_index, set_beat_index
@@ -29,9 +30,19 @@ from app.quotas import check_quota, increment_message_count
 from app.analytics import track_chat_message, track_rag_retrieval
 from app.rag import RetrievalResult, load_base_script
 from app.storage import SessionAccessError
+from app.memory import load_memory_prompt_block
 from app.user_profile import load_profile_prompt_block
 
 _BASE_SCRIPT = load_base_script()
+
+
+def _load_companion_context_block(user_id: Optional[str]) -> Optional[str]:
+    profile = load_profile_prompt_block(user_id)
+    memory = load_memory_prompt_block(user_id)
+    parts = [p for p in (profile, memory) if p]
+    if not parts:
+        return None
+    return "\n\n".join(parts)
 
 
 @dataclass
@@ -94,16 +105,22 @@ def prepare_chat_context(
                 headers={"X-Upgrade-Required": "true"},
             )
 
-    schedule_day_number = resolve_schedule_day_number(
-        user_id, req.course_slug, req.day_number
-    )
+    schedule_day_number = None
+    if req.week_number is None and (req.daily_practice or req.day_number is not None):
+        schedule_day_number = resolve_schedule_day_number(
+            user_id, req.course_slug, req.day_number
+        )
 
     schedule_day = None
     schedule_system_block = None
-    if req.course_slug and schedule_day_number:
+    guide_mode = SCHEDULE_MODE == "guide"
+    if req.course_slug and schedule_day_number and req.week_number is None:
         schedule_day = get_schedule_day(req.course_slug, schedule_day_number)
         if schedule_day:
-            schedule_system_block = build_schedule_system_block(schedule_day)
+            schedule_system_block = build_schedule_context_block(
+                schedule_day,
+                guide_mode=guide_mode,
+            )
 
     history_limit = (
         SCHEDULE_HISTORY_MESSAGES if schedule_system_block else MAX_MEMORY_MESSAGES
@@ -131,7 +148,17 @@ def _fetch_retrieval(
     context_retriever,
     ctx: ChatContext,
 ) -> RetrievalResult:
-    use_rag = ctx.schedule_system_block is None or ctx.req.week_number is not None
+    if not ctx.req.course_slug:
+        return RetrievalResult()
+
+    use_rag = True
+    if (
+        ctx.schedule_system_block
+        and SCHEDULE_MODE == "script"
+        and ctx.req.week_number is None
+    ):
+        use_rag = False
+
     if not use_rag:
         return RetrievalResult()
     retrieval = context_retriever.retrieve(
@@ -150,6 +177,8 @@ def _fetch_retrieval(
 
 
 def _scripted_reply(ctx: ChatContext) -> Optional[str]:
+    if SCHEDULE_MODE == "guide":
+        return None
     if not SCHEDULE_SCRIPT_ENGINE:
         logger.info("script engine off (SCHEDULE_SCRIPT_ENGINE=false)")
         return None
@@ -208,7 +237,7 @@ def produce_reply(
     if scripted is not None:
         return scripted, "script", True, RetrievalResult()
 
-    if ctx.req.course_slug and ctx.schedule_day:
+    if ctx.req.course_slug and ctx.schedule_day and SCHEDULE_MODE == "script":
         logger.warning(
             "falling back to LLM for course=%s day=%s — fix schedule import or beats",
             ctx.req.course_slug,
@@ -216,7 +245,8 @@ def produce_reply(
         )
 
     retrieval = _fetch_retrieval(context_retriever, ctx)
-    profile_block = load_profile_prompt_block(ctx.user_id)
+    profile_block = _load_companion_context_block(ctx.user_id)
+    guide_mode = SCHEDULE_MODE == "guide"
 
     try:
         reply = generate_reply(
@@ -227,6 +257,7 @@ def produce_reply(
             base_script=_BASE_SCRIPT,
             schedule_system_block=ctx.schedule_system_block,
             profile_system_block=profile_block,
+            schedule_guide_mode=guide_mode,
         )
     except Exception as exc:
         logger.exception("generate_reply failed: %s", exc)
@@ -322,7 +353,8 @@ def iter_llm_sse(
 ) -> Iterator[str]:
     """Stream OpenAI tokens when not on the script engine."""
     retrieval = _fetch_retrieval(context_retriever, ctx)
-    profile_block = load_profile_prompt_block(ctx.user_id)
+    profile_block = _load_companion_context_block(ctx.user_id)
+    guide_mode = SCHEDULE_MODE == "guide"
 
     parts: List[str] = []
     try:
@@ -334,6 +366,7 @@ def iter_llm_sse(
             base_script=_BASE_SCRIPT,
             schedule_system_block=ctx.schedule_system_block,
             profile_system_block=profile_block,
+            schedule_guide_mode=guide_mode,
         ):
             parts.append(token)
             payload = json.dumps({"type": "token", "content": token})

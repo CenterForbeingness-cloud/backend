@@ -578,6 +578,7 @@ async def chat_voice(
     provider: Optional[str] = Form(default=None),
     week_number: Optional[int] = Form(default=None),
     day_number: Optional[int] = Form(default=None),
+    daily_practice: bool = Form(default=False),
     _user: Optional[dict] = Depends(get_chat_user),
 ) -> ChatVoiceResponse:
     # TODO(post-MVP): upload TTS bytes to object storage; return signed URL instead of base64.
@@ -612,6 +613,7 @@ async def chat_voice(
         course_slug=course_slug,
         week_number=week_number,
         day_number=day_number,
+        daily_practice=daily_practice,
         mode="voice",
     )
 
