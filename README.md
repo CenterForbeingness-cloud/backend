@@ -7,7 +7,7 @@ FastAPI backend for the AI chat companion, billing, course context (RAG), and se
 | | Score |
 |---|-------|
 | Infrastructure (auth, chat, Stripe, entitlements, RAG, deploy) | **~9/10** |
-| Product moat (profile, memory injection, facts, goals, check-ins) | **~2/10** |
+| Product moat (profile + memory foundation) | **~4/10** | Phase 1 profile + Phase 2 tables/events wired; extraction pipeline still Phase 2+ |
 
 **Build order:** [`MVP_NORTH_STAR.md`](../MVP_NORTH_STAR.md) · [`docs/MVP_LAUNCH_SCOPE.md`](../docs/MVP_LAUNCH_SCOPE.md)
 
@@ -39,15 +39,16 @@ For deploying from this monorepo, splitting into a second Git repo, and staging 
 Companion-first product direction:
 
 - `/chat` is the main user-facing interface (not “open course first”).
-- **Not implemented yet:** `user_profile`, memory injection, `user_facts`, `user_goals`, `memory_events`, `checkins` — see `MVP_NORTH_STAR.md`.
-- Courses are **context for the AI** (RAG + entitlements), not the product shell.
-- Infrastructure (billing, webhooks, quotas, admin login API) is largely done; differentiation is memory.
+- **Phase 1 shipped:** `user_profile` + prompt injection on every `/chat` turn.
+- **Phase 2 foundation:** `user_facts`, `user_goals`, `memory_events` tables + `app/memory.py` injection; `record_memory_event` on Complete day. LLM extraction still post-launch.
+- Courses are **context for the AI** (RAG + entitlements + optional daily themes), not the product shell.
 
 ## Endpoints
 
 - `GET /health`
 - `POST /chat`
-- `POST /chat/stream` (SSE; scripted daily lessons + streamed LLM for other modes)
+- `POST /chat/stream` (SSE; daily practice + streamed LLM)
+- `POST /chat/voice` (STT → same `/chat` brain → TTS)
 - `POST /sessions`
 - `GET /sessions/{session_id}/messages?limit=50`
 - `DELETE /memory/{session_id}`
@@ -248,17 +249,26 @@ Migration file: `backend/sql/supabase_course_daily_schedule.sql` (safe to run st
 
 `current_day_number` is the **schedule index** (`Day 1`, `Day 2`, … in the imported file), not “today’s date.” Users stay on day 2 until `POST /courses/{slug}/progress/advance` (or an explicit `day_number` on `/chat`). Calendar-based auto-advance is not implemented; see `schedules/README.md`.
 
-### Chat behavior
+### Chat behavior (guide mode — default)
 
-With `course_slug` and an authenticated entitled user, the backend resolves the schedule day from `user_course_progress` (default day 1 on first chat). Optional `day_number` on the request overrides stored progress.
+Schedule day themes inject **only** when the client sends `daily_practice: true` (Daily practice UI) or an explicit `day_number` (testing). Lesson chat (`week_number` set) never loads the daily schedule.
 
-The chat response includes `day_number` — the day injected into context.
+| Mode | `daily_practice` | `week_number` | Schedule | RAG |
+|------|------------------|---------------|----------|-----|
+| Companion home | — | — | no | no |
+| Daily practice | `true` | — | yes (themes) | yes (guide mode) |
+| Lesson | — | set | no | yes (week scope) |
+
+Env: `SCHEDULE_MODE=guide` (default). See `docs/GUIDE_MODE_DEPLOY.md`.
+
+Example daily practice request:
 
 ```json
 {
   "session_id": "session-abc",
-  "message": "What should I focus on today?",
-  "course_slug": "mindful-foundations"
+  "message": "I'm feeling tired today.",
+  "course_slug": "week-zero-reset",
+  "daily_practice": true
 }
 ```
 
@@ -266,7 +276,7 @@ Advance after the user completes a day:
 
 `POST /courses/{course_slug}/progress/advance`
 
-Daily practice chat uses a dedicated coaching block in the system prompt (today's lesson script, short replies, move into the exercise after check-in). Pinecone is skipped for daily-only chat so transcript chunks do not override the schedule. Week/lesson chat still uses Pinecone when `week_number` is set.
+Guide mode uses a **theme block** in the system prompt (coach in your own words, use RAG + profile). Legacy **script mode** (`SCHEDULE_MODE=script` + `Say: "..."` lines) is still available for QA via `app/lesson_script.py`.
 
 ### Code
 
