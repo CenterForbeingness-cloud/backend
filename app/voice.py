@@ -263,11 +263,10 @@ def _ensure_voice_usage_schema() -> bool:
         return False
 
 
-def check_voice_quota(user_id: str, additional_seconds: float) -> None:
-    if VOICE_DAILY_SECONDS_CAP <= 0:
-        return
+def _voice_seconds_used_today(user_id: str) -> float:
+    """Spoken seconds in the current UTC calendar day."""
     if not SUPABASE_DB_URL or not _ensure_voice_usage_schema():
-        return
+        return 0.0
 
     now = datetime.now(timezone.utc)
     period_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -284,19 +283,47 @@ def check_voice_quota(user_id: str, additional_seconds: float) -> None:
             (user_id,),
         )
         row = cur.fetchone()
-        if row:
-            used = float(row[0])
-            row_start = row[1]
-            if row_start and row_start.date() < period_start.date():
-                used = 0.0
-        else:
-            used = 0.0
+        if not row:
+            return 0.0
+        used = float(row[0] or 0)
+        row_start = row[1]
+        if row_start and row_start.date() < period_start.date():
+            return 0.0
+        return used
 
-        if used + additional_seconds > VOICE_DAILY_SECONDS_CAP:
-            raise HTTPException(
-                status_code=429,
-                detail=f"Daily voice limit reached ({VOICE_DAILY_SECONDS_CAP}s per day)",
-            )
+
+def get_voice_usage_info(user_id: str) -> dict:
+    """Daily voice quota snapshot for GET /usage."""
+    now = datetime.now(timezone.utc)
+    period_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    reset_at = period_start + timedelta(days=1)
+
+    if VOICE_DAILY_SECONDS_CAP <= 0:
+        used = _voice_seconds_used_today(user_id)
+        return {
+            "voice_seconds_today": round(used, 1),
+            "voice_seconds_limit": None,
+            "voice_reset_at": None,
+        }
+
+    used = _voice_seconds_used_today(user_id)
+    return {
+        "voice_seconds_today": round(used, 1),
+        "voice_seconds_limit": VOICE_DAILY_SECONDS_CAP,
+        "voice_reset_at": reset_at.isoformat(),
+    }
+
+
+def check_voice_quota(user_id: str, additional_seconds: float) -> None:
+    if VOICE_DAILY_SECONDS_CAP <= 0:
+        return
+
+    used = _voice_seconds_used_today(user_id)
+    if used + additional_seconds > VOICE_DAILY_SECONDS_CAP:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily voice limit reached ({VOICE_DAILY_SECONDS_CAP}s per day)",
+        )
 
 
 def record_voice_usage(user_id: str, spoken_seconds: float) -> None:

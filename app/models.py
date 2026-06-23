@@ -179,6 +179,9 @@ class UsageResponse(BaseModel):
     messages_today: int
     limit: int
     reset_at: datetime
+    voice_seconds_today: float = 0.0
+    voice_seconds_limit: Optional[int] = None
+    voice_reset_at: Optional[datetime] = None
 
 
 class UserProfileResponse(BaseModel):

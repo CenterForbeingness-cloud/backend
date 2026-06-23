@@ -135,6 +135,7 @@ from app.rate_limit import AUTH_LIMIT, BILLING_LIMIT, CHAT_LIMIT, SESSIONS_LIMIT
 from app.voice import (
     assert_voice_enabled,
     check_voice_quota,
+    get_voice_usage_info,
     record_voice_usage,
     synthesize_speech,
     transcribe_audio,
@@ -1329,10 +1330,15 @@ def get_usage(_user: Optional[dict] = Depends(get_current_user)) -> UsageRespons
         raise HTTPException(status_code=401, detail="Authentication required")
 
     usage = get_usage_info(user_id, FAIR_USE_LIMIT)
+    voice = get_voice_usage_info(user_id)
+    voice_reset = voice.get("voice_reset_at")
     return UsageResponse(
         messages_today=usage["messages_today"],
         limit=usage["limit"],
         reset_at=usage["reset_at"],
+        voice_seconds_today=voice["voice_seconds_today"],
+        voice_seconds_limit=voice.get("voice_seconds_limit"),
+        voice_reset_at=voice_reset,
     )
 
 
