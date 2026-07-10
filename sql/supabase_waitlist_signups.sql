@@ -18,3 +18,4 @@ CREATE INDEX IF NOT EXISTS waitlist_signups_launch_pending_idx
 ALTER TABLE public.waitlist_signups ENABLE ROW LEVEL SECURITY;
 
 -- No public policies: backend DB URL / service role only.
+-- After first deploy, run backend/sql/supabase_waitlist_email_integrity.sql for case-insensitive uniqueness.

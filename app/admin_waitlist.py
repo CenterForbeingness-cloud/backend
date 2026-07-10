@@ -103,17 +103,22 @@ def list_waitlist_signups(
     try:
         with db_connection() as conn, conn.cursor() as cur:
             cur.execute(
-                f"SELECT COUNT(*) FROM public.waitlist_signups WHERE {where_sql}",
+                f"""
+                SELECT COUNT(DISTINCT lower(trim(email)))
+                FROM public.waitlist_signups
+                WHERE {where_sql}
+                """,
                 tuple(params),
             )
             total = int(cur.fetchone()[0])
 
             cur.execute(
                 f"""
-                SELECT id, email, source, created_at, launch_notified_at
+                SELECT DISTINCT ON (lower(trim(email)))
+                  id, email, source, created_at, launch_notified_at
                 FROM public.waitlist_signups
                 WHERE {where_sql}
-                ORDER BY created_at DESC
+                ORDER BY lower(trim(email)), created_at DESC
                 LIMIT %s OFFSET %s
                 """,
                 (*params, limit, offset),
@@ -141,38 +146,65 @@ def get_waitlist_stats() -> AdminWaitlistStatsResponse:
 
     try:
         with db_connection() as conn, conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM public.waitlist_signups")
-            total = int(cur.fetchone()[0])
+            cur.execute(
+                """
+                SELECT
+                  COUNT(*) AS total_rows,
+                  COUNT(DISTINCT lower(trim(email))) AS distinct_emails
+                FROM public.waitlist_signups
+                """
+            )
+            row = cur.fetchone()
+            total_rows = int(row[0])
+            distinct_emails = int(row[1])
 
             cur.execute(
-                "SELECT COUNT(*) FROM public.waitlist_signups WHERE created_at >= %s",
+                """
+                SELECT COUNT(DISTINCT lower(trim(email)))
+                FROM public.waitlist_signups
+                WHERE created_at >= %s
+                """,
                 (week_start,),
             )
             this_week = int(cur.fetchone()[0])
 
             cur.execute(
-                "SELECT COUNT(*) FROM public.waitlist_signups WHERE launch_notified_at IS NULL"
+                """
+                SELECT COUNT(DISTINCT lower(trim(email)))
+                FROM public.waitlist_signups
+                WHERE launch_notified_at IS NULL
+                """
             )
             pending_launch = int(cur.fetchone()[0])
 
             cur.execute(
-                "SELECT COUNT(*) FROM public.waitlist_signups WHERE launch_notified_at IS NOT NULL"
+                """
+                SELECT COUNT(DISTINCT lower(trim(email)))
+                FROM public.waitlist_signups
+                WHERE launch_notified_at IS NOT NULL
+                """
             )
             launch_notified = int(cur.fetchone()[0])
     except Exception as exc:
         logger.exception("get_waitlist_stats failed: %s", exc)
         raise RuntimeError("Waitlist stats failed") from exc
 
+    duplicate_rows = max(0, total_rows - distinct_emails)
     return AdminWaitlistStatsResponse(
-        total_signups=total,
+        total_signups=distinct_emails,
         signups_this_week=this_week,
         pending_launch_notify=pending_launch,
         launch_notified_count=launch_notified,
+        total_rows=total_rows,
+        distinct_emails=distinct_emails,
+        duplicate_row_count=duplicate_rows,
+        email_integrity_ok=duplicate_rows == 0,
         generated_at=now,
     )
 
 
 def export_waitlist_csv(*, query: str = "", pending_only: bool = False) -> str:
+    """One row per normalized email (latest signup wins)."""
     chunk = list_waitlist_signups(
         query=query,
         limit=10_000,

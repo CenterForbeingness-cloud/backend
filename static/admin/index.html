@@ -228,8 +228,23 @@
 
       <section id="tab-waitlist" class="card hidden">
         <h2 style="margin-top:0;font-size:1.1rem;">Website waitlist</h2>
-        <p class="sub" style="margin-top:0;">Signups from the marketing site (<code>waitlist_signups</code> in Supabase).</p>
+        <p class="sub" style="margin-top:0;">Signups from the marketing site</p>
+        <div id="waitlistIntegrity"></div>
         <div id="waitlistStats" class="stat-grid"></div>
+        <h3 style="margin:16px 0 8px;font-size:0.95rem;color:var(--accent2);">Traffic &amp; conversion</h3>
+        <div class="row" style="margin-bottom:8px;">
+          <div style="max-width:120px;">
+            <label for="waitlistTrafficDays">Days</label>
+            <select id="waitlistTrafficDays">
+              <option value="7" selected>7</option>
+              <option value="14">14</option>
+              <option value="30">30</option>
+            </select>
+          </div>
+        </div>
+        <div id="waitlistTrafficSummary" class="stat-grid"></div>
+        <div id="waitlistTrafficTable"></div>
+        <h3 style="margin:20px 0 8px;font-size:0.95rem;color:var(--accent2);">Signups</h3>
         <div class="row">
           <div>
             <label for="waitlistQ">Search email</label>
@@ -1312,23 +1327,62 @@
 
     async function loadWaitlistTab() {
       const statsEl = $("waitlistStats");
+      const integrityEl = $("waitlistIntegrity");
+      const trafficSummary = $("waitlistTrafficSummary");
+      const trafficTable = $("waitlistTrafficTable");
       const table = $("waitlistTable");
       const pageInfo = $("waitlistPageInfo");
       statsEl.innerHTML = "<p class=\"sub\">Loading stats…</p>";
+      trafficSummary.innerHTML = "";
+      trafficTable.innerHTML = "";
       table.innerHTML = "";
       try {
         const st = await api("/admin/waitlist/stats");
+        if (st.email_integrity_ok === false) {
+          integrityEl.innerHTML = `<div class="msg err">
+            Duplicate waitlist rows detected (${st.duplicate_row_count} extra row(s) for ${st.distinct_emails} unique emails).
+            Run <code>backend/sql/supabase_waitlist_email_integrity.sql</code> in Supabase.
+          </div>`;
+        } else {
+          integrityEl.innerHTML = "";
+        }
         statsEl.innerHTML = [
-          statCard(st.total_signups ?? 0, "Total signups"),
+          statCard(st.distinct_emails ?? st.total_signups ?? 0, "Unique emails"),
           statCard(st.signups_this_week ?? 0, "This week"),
           statCard(st.pending_launch_notify ?? 0, "Pending launch email"),
           statCard(st.launch_notified_count ?? 0, "Launch notified"),
         ].join("");
+
+        const tDays = $("waitlistTrafficDays")?.value || "7";
+        try {
+          const tr = await api("/admin/waitlist/traffic?days=" + encodeURIComponent(tDays));
+          trafficSummary.innerHTML = [
+            statCard(tr.total_page_views ?? 0, "Page views"),
+            statCard(tr.total_unique_sessions ?? 0, "Unique sessions"),
+            statCard(tr.total_signups ?? 0, "Signups (period)"),
+            statCard(tr.period_conversion_pct != null ? tr.period_conversion_pct + "%" : "—", "Conversion"),
+          ].join("");
+          const days = tr.days || [];
+          trafficTable.innerHTML = days.length
+            ? `<table><thead><tr><th>Date</th><th>Views</th><th>Sessions</th><th>Signups</th><th>Conv.</th></tr></thead><tbody>
+              ${days.map((d) => `<tr>
+                <td><small>${d.stat_date}</small></td>
+                <td>${d.page_views}</td>
+                <td>${d.unique_sessions}</td>
+                <td>${d.signups}</td>
+                <td>${d.conversion_pct != null ? d.conversion_pct + "%" : "—"}</td>
+              </tr>`).join("")}
+            </tbody></table>`
+            : "<p class=\"sub\">No traffic yet — enable the marketing site beacon.</p>";
+        } catch (te) {
+          trafficTable.innerHTML = `<p class="sub">${esc(te.message)}</p>`;
+        }
+
         const data = await api(waitlistQueryParams());
         const total = data.total ?? 0;
         const start = total ? waitlistOffset + 1 : 0;
         const end = Math.min(waitlistOffset + waitlistPageSize, total);
-        pageInfo.textContent = total ? `${start}–${end} of ${total}` : "No rows";
+        pageInfo.textContent = total ? `${start}–${end} of ${total} unique emails` : "No rows";
         const rows = data.signups || [];
         if (!rows.length) {
           table.innerHTML = "<p class=\"sub\">No signups match this filter.</p>";
@@ -1459,6 +1513,7 @@
     $("waitlistExportBtn")?.addEventListener("click", () => {
       downloadWaitlistCsv().catch((e) => showMsg($("appMsg"), e.message, false));
     });
+    $("waitlistTrafficDays")?.addEventListener("change", loadWaitlistTab);
     $("opsDays")?.addEventListener("change", loadOpsSummary);
     $("checkScheduleBtn")?.addEventListener("click", loadScheduleHealth);
 

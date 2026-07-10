@@ -84,6 +84,9 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "").strip()
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
 
+MARKETING_BEACON_SECRET = os.getenv("MARKETING_BEACON_SECRET", "").strip()
+RATE_LIMIT_MARKETING = os.getenv("RATE_LIMIT_MARKETING", "120/minute")
+
 # Voice (MVP Launch) — POST /chat/voice
 VOICE_ENABLED = os.getenv("VOICE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 VOICE_MAX_RECORDING_SEC = int(os.getenv("VOICE_MAX_RECORDING_SEC", "90"))

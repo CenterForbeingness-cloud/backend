@@ -9,6 +9,8 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.config import (
+    MARKETING_BEACON_SECRET,
+    RATE_LIMIT_MARKETING,
     RATE_LIMIT_AUTH,
     RATE_LIMIT_BILLING,
     RATE_LIMIT_CHAT,
@@ -46,3 +48,4 @@ CHAT_LIMIT = rate_limit(RATE_LIMIT_CHAT)
 SESSIONS_LIMIT = rate_limit(RATE_LIMIT_SESSIONS)
 AUTH_LIMIT = rate_limit(RATE_LIMIT_AUTH)
 BILLING_LIMIT = rate_limit(RATE_LIMIT_BILLING)
+MARKETING_LIMIT = rate_limit(RATE_LIMIT_MARKETING)

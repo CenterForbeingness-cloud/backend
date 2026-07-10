@@ -58,6 +58,7 @@ from app.admin_waitlist import (
     list_waitlist_signups,
     waitlist_table_available,
 )
+from app.marketing_traffic import get_waitlist_traffic, marketing_traffic_available
 from app.models import (
     AdminAnalyticsEventRow,
     AdminAnalyticsSummaryResponse,
@@ -95,6 +96,7 @@ from app.models import (
     AdminUsersResponse,
     AdminWaitlistListResponse,
     AdminWaitlistStatsResponse,
+    AdminWaitlistTrafficResponse,
 )
 from app.quotas import get_usage_info
 
@@ -1252,3 +1254,24 @@ def admin_waitlist_export_endpoint(
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="waitlist_signups.csv"'},
     )
+
+
+@router.get("/waitlist/traffic", response_model=AdminWaitlistTrafficResponse)
+def admin_waitlist_traffic_endpoint(
+    days: int = 7,
+    page_path: Optional[str] = None,
+    _admin: dict = Depends(get_current_admin),
+) -> AdminWaitlistTrafficResponse:
+    """Phase 2: page views, sessions, signups, conversion by day."""
+    if not marketing_traffic_available():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Marketing traffic tables not available — run backend/sql/supabase_marketing_traffic.sql",
+        )
+    try:
+        return get_waitlist_traffic(days=days, page_path=page_path)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal, Optional
 from uuid import uuid4
 
@@ -634,7 +634,42 @@ class AdminWaitlistStatsResponse(BaseModel):
     signups_this_week: int = 0
     pending_launch_notify: int = 0
     launch_notified_count: int = 0
+    total_rows: int = 0
+    distinct_emails: int = 0
+    duplicate_row_count: int = 0
+    email_integrity_ok: bool = True
     generated_at: datetime
+
+
+class MarketingPageViewRequest(BaseModel):
+    path: Optional[str] = Field(default="/", max_length=220)
+    session_id: str = Field(..., min_length=8, max_length=64)
+    referrer: Optional[str] = Field(default=None, max_length=500)
+
+
+class MarketingPageViewResponse(BaseModel):
+    ok: bool = True
+    counted: bool = False
+    reason: Optional[str] = None
+
+
+class AdminWaitlistTrafficDay(BaseModel):
+    stat_date: date
+    page_views: int = 0
+    unique_sessions: int = 0
+    signups: int = 0
+    conversion_pct: Optional[float] = None
+
+
+class AdminWaitlistTrafficResponse(BaseModel):
+    period_days: int
+    page_path: str
+    generated_at: datetime
+    days: list[AdminWaitlistTrafficDay] = Field(default_factory=list)
+    total_page_views: int = 0
+    total_unique_sessions: int = 0
+    total_signups: int = 0
+    period_conversion_pct: Optional[float] = None
 
 
 # Backward-compatible aliases

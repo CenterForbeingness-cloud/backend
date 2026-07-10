@@ -49,6 +49,7 @@ from app.config import (
     CORS_ORIGINS,
     DEFAULT_PROVIDER,
     FAIR_USE_LIMIT,
+    MARKETING_BEACON_SECRET,
     RATE_LIMIT_ENABLED,
     STRIPE_PUBLISHABLE_KEY,
     STRIPE_SECRET_KEY,
@@ -94,6 +95,8 @@ from app.models import (
     UserProfileResponse,
     UserProfileUpdateRequest,
     WeekItem,
+    MarketingPageViewRequest,
+    MarketingPageViewResponse,
     generate_session_id,
 )
 from app.course_progress import advance_day, get_progress
@@ -131,7 +134,8 @@ from app.email_service import (
     build_admin_password_reset_url,
     send_admin_password_reset_email,
 )
-from app.rate_limit import AUTH_LIMIT, BILLING_LIMIT, CHAT_LIMIT, SESSIONS_LIMIT, limiter
+from app.rate_limit import AUTH_LIMIT, BILLING_LIMIT, CHAT_LIMIT, MARKETING_LIMIT, SESSIONS_LIMIT, limiter
+from app.marketing_traffic import record_page_view
 from app.voice import (
     assert_voice_enabled,
     check_voice_quota,
@@ -485,6 +489,37 @@ def health_voice_gates(course_slug: Optional[str] = None) -> dict:
     from app.voice_gates import evaluate_voice_gates
 
     return evaluate_voice_gates(course_slug=course_slug)
+
+
+def _verify_marketing_beacon(request: Request) -> None:
+    secret = (MARKETING_BEACON_SECRET or "").strip()
+    if not secret:
+        return
+    header = (
+        request.headers.get("X-Marketing-Beacon-Secret")
+        or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    )
+    if not header or not hmac.compare_digest(header, secret):
+        raise HTTPException(status_code=401, detail="Invalid marketing beacon secret")
+
+
+@app.post("/public/marketing/page-view", response_model=MarketingPageViewResponse)
+@MARKETING_LIMIT
+async def public_marketing_page_view(
+    request: Request,
+    body: MarketingPageViewRequest,
+) -> MarketingPageViewResponse:
+    """Phase 2: one counted view per session + path + UTC day (deduped)."""
+    _verify_marketing_beacon(request)
+    try:
+        counted, reason = record_page_view(
+            path=body.path,
+            session_id=body.session_id,
+            referrer=body.referrer,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return MarketingPageViewResponse(ok=True, counted=counted, reason=reason)
 
 
 @app.get("/billing/return/success", response_class=HTMLResponse)
