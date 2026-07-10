@@ -185,6 +185,7 @@
       <div id="appMsg"></div>
       <div class="tabs">
         <button type="button" class="tab active" data-tab="ops">Ops & AI</button>
+        <button type="button" class="tab" data-tab="waitlist">Website waitlist</button>
         <button type="button" class="tab" data-tab="users">App users</button>
         <button type="button" class="tab" data-tab="courses">Courses</button>
         <button type="button" class="tab" data-tab="staff">Admin roles</button>
@@ -223,6 +224,35 @@
           </div>
         </div>
         <div id="opsSchedule"></div>
+      </section>
+
+      <section id="tab-waitlist" class="card hidden">
+        <h2 style="margin-top:0;font-size:1.1rem;">Website waitlist</h2>
+        <p class="sub" style="margin-top:0;">Signups from the marketing site (<code>waitlist_signups</code> in Supabase).</p>
+        <div id="waitlistStats" class="stat-grid"></div>
+        <div class="row">
+          <div>
+            <label for="waitlistQ">Search email</label>
+            <input id="waitlistQ" type="search" placeholder="name@domain.com" />
+          </div>
+          <div style="max-width:160px;">
+            <label for="waitlistPending">Filter</label>
+            <select id="waitlistPending">
+              <option value="">All signups</option>
+              <option value="1">Pending launch email only</option>
+            </select>
+          </div>
+          <div style="flex:0;">
+            <button type="button" class="secondary" id="waitlistSearchBtn">Search</button>
+          </div>
+        </div>
+        <div class="row" style="margin-bottom:8px;">
+          <button type="button" class="secondary" id="waitlistExportBtn">Download CSV</button>
+          <button type="button" class="linkish" id="waitlistPrevBtn">Prev</button>
+          <button type="button" class="linkish" id="waitlistNextBtn">Next</button>
+          <span class="sub" id="waitlistPageInfo"></span>
+        </div>
+        <div id="waitlistTable"></div>
       </section>
 
       <section id="tab-users" class="card hidden">
@@ -316,6 +346,8 @@
     let courseSlugs = [];
     let auditOffset = 0;
     const auditPageSize = 40;
+    let waitlistOffset = 0;
+    const waitlistPageSize = 50;
 
     function token() { return localStorage.getItem(TOKEN_KEY) || ""; }
     function adminRole() { return me.role || localStorage.getItem(ROLE_KEY) || "viewer"; }
@@ -583,10 +615,11 @@
       btn.addEventListener("click", () => {
         document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
-        ["ops", "users", "courses", "staff", "audit"].forEach((t) => {
+        ["ops", "waitlist", "users", "courses", "staff", "audit"].forEach((t) => {
           $("tab-" + t).classList.toggle("hidden", btn.dataset.tab !== t);
         });
         if (btn.dataset.tab === "ops") loadOpsSummary();
+        if (btn.dataset.tab === "waitlist") loadWaitlistTab();
         if (btn.dataset.tab === "courses") loadCoursesTab();
         if (btn.dataset.tab === "staff") loadStaff();
         if (btn.dataset.tab === "audit") { auditOffset = 0; loadAudit(); }
@@ -1268,6 +1301,81 @@
       return `<div class="stat"><div class="val">${val}</div><div class="lbl">${label}</div></div>`;
     }
 
+    function waitlistQueryParams() {
+      const q = ($("waitlistQ")?.value || "").trim();
+      const pending = $("waitlistPending")?.value === "1";
+      let path = `/admin/waitlist?limit=${waitlistPageSize}&offset=${waitlistOffset}`;
+      if (q) path += "&q=" + encodeURIComponent(q);
+      if (pending) path += "&pending_only=true";
+      return path;
+    }
+
+    async function loadWaitlistTab() {
+      const statsEl = $("waitlistStats");
+      const table = $("waitlistTable");
+      const pageInfo = $("waitlistPageInfo");
+      statsEl.innerHTML = "<p class=\"sub\">Loading stats…</p>";
+      table.innerHTML = "";
+      try {
+        const st = await api("/admin/waitlist/stats");
+        statsEl.innerHTML = [
+          statCard(st.total_signups ?? 0, "Total signups"),
+          statCard(st.signups_this_week ?? 0, "This week"),
+          statCard(st.pending_launch_notify ?? 0, "Pending launch email"),
+          statCard(st.launch_notified_count ?? 0, "Launch notified"),
+        ].join("");
+        const data = await api(waitlistQueryParams());
+        const total = data.total ?? 0;
+        const start = total ? waitlistOffset + 1 : 0;
+        const end = Math.min(waitlistOffset + waitlistPageSize, total);
+        pageInfo.textContent = total ? `${start}–${end} of ${total}` : "No rows";
+        const rows = data.signups || [];
+        if (!rows.length) {
+          table.innerHTML = "<p class=\"sub\">No signups match this filter.</p>";
+          return;
+        }
+        table.innerHTML = `<table><thead><tr>
+          <th>Email</th><th>Source</th><th>Signed up</th><th>Launch email</th>
+        </tr></thead><tbody>
+          ${rows.map((s) => `<tr>
+            <td>${esc(s.email)}</td>
+            <td><span class="pill">${esc(s.source || "—")}</span></td>
+            <td><small>${fmtDt(s.created_at)}</small></td>
+            <td><small>${s.launch_notified_at ? fmtDt(s.launch_notified_at) : "<span class=\"pill draft\">pending</span>"}</small></td>
+          </tr>`).join("")}
+        </tbody></table>`;
+      } catch (e) {
+        statsEl.innerHTML = "";
+        table.innerHTML = `<div class="msg err">${esc(e.message)}</div>`;
+        pageInfo.textContent = "";
+      }
+    }
+
+    async function downloadWaitlistCsv() {
+      let path = "/admin/waitlist/export?";
+      const q = ($("waitlistQ")?.value || "").trim();
+      if (q) path += "q=" + encodeURIComponent(q) + "&";
+      if ($("waitlistPending")?.value === "1") path += "pending_only=true&";
+      const headers = {};
+      if (token()) headers.Authorization = "Bearer " + token();
+      const res = await fetch(apiBase + path, { headers });
+      if (!res.ok) {
+        let msg = res.statusText;
+        try {
+          const body = await res.json();
+          msg = body.detail || msg;
+        } catch (_) {}
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "waitlist_signups.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
     async function loadOpsSummary() {
       const days = $("opsDays")?.value || "7";
       const stats = $("opsStats");
@@ -1339,6 +1447,18 @@
       loadCoursesTab();
     });
     $("refreshOpsBtn")?.addEventListener("click", loadOpsSummary);
+    $("waitlistSearchBtn")?.addEventListener("click", () => { waitlistOffset = 0; loadWaitlistTab(); });
+    $("waitlistPrevBtn")?.addEventListener("click", () => {
+      waitlistOffset = Math.max(0, waitlistOffset - waitlistPageSize);
+      loadWaitlistTab();
+    });
+    $("waitlistNextBtn")?.addEventListener("click", () => {
+      waitlistOffset += waitlistPageSize;
+      loadWaitlistTab();
+    });
+    $("waitlistExportBtn")?.addEventListener("click", () => {
+      downloadWaitlistCsv().catch((e) => showMsg($("appMsg"), e.message, false));
+    });
     $("opsDays")?.addEventListener("change", loadOpsSummary);
     $("checkScheduleBtn")?.addEventListener("click", loadScheduleHealth);
 

@@ -614,6 +614,29 @@ class AdminDeleteStaffResponse(BaseModel):
     role: str
 
 
+class AdminWaitlistEntry(BaseModel):
+    id: str
+    email: str
+    source: str = "sentient-landing"
+    created_at: datetime
+    launch_notified_at: Optional[datetime] = None
+
+
+class AdminWaitlistListResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    signups: list[AdminWaitlistEntry] = Field(default_factory=list)
+
+
+class AdminWaitlistStatsResponse(BaseModel):
+    total_signups: int = 0
+    signups_this_week: int = 0
+    pending_launch_notify: int = 0
+    launch_notified_count: int = 0
+    generated_at: datetime
+
+
 # Backward-compatible aliases
 class AdminUpdateRoleRequest(AdminUpdateStaffRequest):
     pass

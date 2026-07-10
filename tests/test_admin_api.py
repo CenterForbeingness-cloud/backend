@@ -402,6 +402,17 @@ def test_admin_get_course_endpoint_not_found() -> None:
     assert res.status_code == 404
 
 
+def test_admin_waitlist_stats_requires_table() -> None:
+    client = TestClient(app)
+    with patch("app.admin_api.verify_admin_token", return_value={"sub": "a", "type": "admin"}):
+        with patch("app.admin_api.waitlist_table_available", return_value=False):
+            res = client.get(
+                "/admin/waitlist/stats",
+                headers={"Authorization": "Bearer x"},
+            )
+    assert res.status_code == 503
+
+
 def test_admin_delete_staff_endpoint_blocks_self() -> None:
     client = TestClient(app)
     admin_id = "00000000-0000-0000-0000-0000000000aa"

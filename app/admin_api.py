@@ -14,7 +14,7 @@ from typing import Any, Optional
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Security, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.admin_auth import (
@@ -52,6 +52,12 @@ from app.admin_courses import (
     upsert_admin_course_voice,
 )
 from app.admin_ops import get_admin_analytics_summary, get_admin_schedule_health
+from app.admin_waitlist import (
+    export_waitlist_csv,
+    get_waitlist_stats,
+    list_waitlist_signups,
+    waitlist_table_available,
+)
 from app.models import (
     AdminAnalyticsEventRow,
     AdminAnalyticsSummaryResponse,
@@ -87,6 +93,8 @@ from app.models import (
     AdminUserProfileSnippet,
     AdminUserSummary,
     AdminUsersResponse,
+    AdminWaitlistListResponse,
+    AdminWaitlistStatsResponse,
 )
 from app.quotas import get_usage_info
 
@@ -1160,3 +1168,87 @@ def admin_schedule_health_endpoint(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Schedule health read failed",
         ) from exc
+
+
+@router.get("/waitlist/stats", response_model=AdminWaitlistStatsResponse)
+def admin_waitlist_stats_endpoint(
+    _admin: dict = Depends(get_current_admin),
+) -> AdminWaitlistStatsResponse:
+    """Website waitlist totals (marketing signups in shared Supabase)."""
+    if not waitlist_table_available():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Waitlist table not available — run backend/sql/supabase_waitlist_signups.sql",
+        )
+    try:
+        return get_waitlist_stats()
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get("/waitlist", response_model=AdminWaitlistListResponse)
+def admin_waitlist_list_endpoint(
+    q: str = "",
+    limit: int = 50,
+    offset: int = 0,
+    pending_only: bool = False,
+    _admin: dict = Depends(get_current_admin),
+) -> AdminWaitlistListResponse:
+    """Paginated website waitlist emails."""
+    if not waitlist_table_available():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Waitlist table not available",
+        )
+    try:
+        return list_waitlist_signups(
+            query=q,
+            limit=limit,
+            offset=offset,
+            pending_only=pending_only,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get("/waitlist/export")
+def admin_waitlist_export_endpoint(
+    request: Request,
+    q: str = "",
+    pending_only: bool = False,
+    admin: dict = Depends(get_current_admin),
+) -> PlainTextResponse:
+    """CSV export of waitlist signups (audit logged)."""
+    if not waitlist_table_available():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Waitlist table not available",
+        )
+    try:
+        csv_body = export_waitlist_csv(query=q, pending_only=pending_only)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+    write_admin_audit_log(
+        admin_id=str(admin["sub"]),
+        action="EXPORT_DATA",
+        resource_type="waitlist",
+        resource_id="export",
+        details={"query": q[:80] if q else None, "pending_only": pending_only},
+        request=request,
+        http_status_code=200,
+    )
+    return PlainTextResponse(
+        content=csv_body,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="waitlist_signups.csv"'},
+    )
