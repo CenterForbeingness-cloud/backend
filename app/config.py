@@ -86,8 +86,6 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
 
 MARKETING_BEACON_SECRET = os.getenv("MARKETING_BEACON_SECRET", "").strip()
 RATE_LIMIT_MARKETING = os.getenv("RATE_LIMIT_MARKETING", "120/minute")
-WAITLIST_NOTIFY_URL = os.getenv("WAITLIST_NOTIFY_URL", "").strip()
-WAITLIST_LAUNCH_SECRET = os.getenv("WAITLIST_LAUNCH_SECRET", "").strip()
 
 # Voice (MVP Launch) — POST /chat/voice
 VOICE_ENABLED = os.getenv("VOICE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}

@@ -1,5 +1,5 @@
 """
-email_service.py — transactional email (admin invites). SMTP via env vars.
+email_service.py — SMTP email for admin staff invites and admin password reset only.
 """
 
 from __future__ import annotations
