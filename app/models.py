@@ -672,6 +672,21 @@ class AdminWaitlistTrafficResponse(BaseModel):
     period_conversion_pct: Optional[float] = None
 
 
+class AdminWaitlistLaunchRequest(BaseModel):
+    dry_run: bool = True
+    app_url: Optional[str] = Field(default=None, max_length=500)
+
+
+class AdminWaitlistLaunchResponse(BaseModel):
+    ok: bool
+    dry_run: bool = False
+    pending: int = 0
+    sent: int = 0
+    failed: int = 0
+    total: int = 0
+    message: Optional[str] = None
+
+
 # Backward-compatible aliases
 class AdminUpdateRoleRequest(AdminUpdateStaffRequest):
     pass

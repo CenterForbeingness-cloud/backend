@@ -413,6 +413,35 @@ def test_admin_waitlist_stats_requires_table() -> None:
     assert res.status_code == 503
 
 
+def test_admin_waitlist_launch_requires_owner() -> None:
+    client = TestClient(app)
+    with patch("app.admin_api.verify_admin_token", return_value={"sub": "a", "admin_role": "editor"}):
+        res = client.post(
+            "/admin/waitlist/launch-notify",
+            headers={"Authorization": "Bearer x"},
+            json={"dry_run": True},
+        )
+    assert res.status_code == 403
+
+
+def test_admin_waitlist_launch_dry_run_mocked() -> None:
+    from app.models import AdminWaitlistLaunchResponse
+
+    client = TestClient(app)
+    fake = AdminWaitlistLaunchResponse(ok=True, dry_run=True, pending=3, total=3)
+    with patch("app.admin_api.verify_admin_token", return_value={"sub": "a", "admin_role": "owner"}):
+        with patch("app.admin_api.waitlist_table_available", return_value=True):
+            with patch("app.admin_api.trigger_waitlist_launch_notify", return_value=fake):
+                with patch("app.admin_api.write_admin_audit_log"):
+                    res = client.post(
+                        "/admin/waitlist/launch-notify",
+                        headers={"Authorization": "Bearer x"},
+                        json={"dry_run": True},
+                    )
+    assert res.status_code == 200
+    assert res.json()["pending"] == 3
+
+
 def test_admin_delete_staff_endpoint_blocks_self() -> None:
     client = TestClient(app)
     admin_id = "00000000-0000-0000-0000-0000000000aa"

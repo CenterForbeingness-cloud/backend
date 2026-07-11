@@ -7,12 +7,18 @@ Source of truth: public.waitlist_signups (written by Sentaint Web). Same Supabas
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Optional
 
-from app.config import SUPABASE_DB_URL, logger
+from app.config import (
+    SUPABASE_DB_URL,
+    WAITLIST_LAUNCH_SECRET,
+    WAITLIST_NOTIFY_URL,
+    logger,
+)
 from app.db import db_connection
 from app.models import (
     AdminWaitlistEntry,
+    AdminWaitlistLaunchResponse,
     AdminWaitlistListResponse,
     AdminWaitlistStatsResponse,
 )
@@ -219,3 +225,64 @@ def export_waitlist_csv(*, query: str = "", pending_only: bool = False) -> str:
         source = (s.source or "").replace('"', '""')
         lines.append(f'"{email}","{source}","{created}","{notified}"')
     return "\n".join(lines) + "\n"
+
+
+def trigger_waitlist_launch_notify(
+    *,
+    dry_run: bool = False,
+    app_url: Optional[str] = None,
+    require_email_integrity: bool = True,
+) -> AdminWaitlistLaunchResponse:
+    """Proxy launch emails via the marketing site notify endpoint (Phase 4)."""
+    notify_url = (WAITLIST_NOTIFY_URL or "").strip()
+    secret = (WAITLIST_LAUNCH_SECRET or "").strip()
+    if not notify_url or not secret:
+        raise RuntimeError(
+            "WAITLIST_NOTIFY_URL and WAITLIST_LAUNCH_SECRET must be set on the backend"
+        )
+
+    if require_email_integrity and not dry_run:
+        stats = get_waitlist_stats()
+        if not stats.email_integrity_ok:
+            raise RuntimeError(
+                "Waitlist has duplicate email rows — run supabase_waitlist_email_integrity.sql "
+                f"before sending ({stats.duplicate_row_count} extra row(s))"
+            )
+
+    payload: dict[str, Any] = {"dryRun": dry_run}
+    if app_url:
+        payload["appUrl"] = app_url.strip()
+
+    import httpx
+
+    try:
+        with httpx.Client(timeout=300.0) as client:
+            resp = client.post(
+                notify_url,
+                json=payload,
+                headers={"Authorization": f"Bearer {secret}"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text[:500] if exc.response else str(exc)
+        logger.error("waitlist launch notify HTTP error: %s", detail)
+        raise RuntimeError(f"Launch notify failed: {detail}") from exc
+    except Exception as exc:
+        logger.exception("waitlist launch notify failed: %s", exc)
+        raise RuntimeError("Launch notify request failed") from exc
+
+    if not dry_run:
+        pending = int(data.get("pending") or 0)
+    else:
+        pending = int(data.get("pending") or data.get("total") or 0)
+
+    return AdminWaitlistLaunchResponse(
+        ok=bool(data.get("ok", True)),
+        dry_run=bool(data.get("dryRun", dry_run)),
+        pending=pending,
+        sent=int(data.get("sent") or 0),
+        failed=int(data.get("failed") or 0),
+        total=int(data.get("total") or pending),
+        message=data.get("message"),
+    )

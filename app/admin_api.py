@@ -56,6 +56,7 @@ from app.admin_waitlist import (
     export_waitlist_csv,
     get_waitlist_stats,
     list_waitlist_signups,
+    trigger_waitlist_launch_notify,
     waitlist_table_available,
 )
 from app.marketing_traffic import get_waitlist_traffic, marketing_traffic_available
@@ -97,6 +98,8 @@ from app.models import (
     AdminWaitlistListResponse,
     AdminWaitlistStatsResponse,
     AdminWaitlistTrafficResponse,
+    AdminWaitlistLaunchRequest,
+    AdminWaitlistLaunchResponse,
 )
 from app.quotas import get_usage_info
 
@@ -121,6 +124,7 @@ _AUDIT_FILTER_ACTIONS = frozenset({
     "CREATE_COURSE",
     "UPDATE_COURSE",
     "PUBLISH_COURSE",
+    "WAITLIST_LAUNCH_NOTIFY",
 })
 
 
@@ -1275,3 +1279,48 @@ def admin_waitlist_traffic_endpoint(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),
         ) from exc
+
+
+@router.post("/waitlist/launch-notify", response_model=AdminWaitlistLaunchResponse)
+def admin_waitlist_launch_notify_endpoint(
+    request: Request,
+    body: AdminWaitlistLaunchRequest,
+    admin: dict = Depends(get_current_admin),
+) -> AdminWaitlistLaunchResponse:
+    """Phase 4: dry-run or send launch emails via marketing site (owner only)."""
+    _require_owner_role(admin)
+    if not waitlist_table_available():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Waitlist table not available",
+        )
+    try:
+        result = trigger_waitlist_launch_notify(
+            dry_run=body.dry_run,
+            app_url=body.app_url,
+        )
+    except RuntimeError as exc:
+        msg = str(exc)
+        code = (
+            status.HTTP_503_SERVICE_UNAVAILABLE
+            if "WAITLIST_" in msg or "duplicate email" in msg.lower()
+            else status.HTTP_502_BAD_GATEWAY
+        )
+        raise HTTPException(status_code=code, detail=msg) from exc
+
+    write_admin_audit_log(
+        admin_id=str(admin["sub"]),
+        action="WAITLIST_LAUNCH_NOTIFY",
+        resource_type="waitlist",
+        resource_id="launch",
+        details={
+            "dry_run": body.dry_run,
+            "pending": result.pending,
+            "sent": result.sent,
+            "failed": result.failed,
+            "total": result.total,
+        },
+        request=request,
+        http_status_code=200,
+    )
+    return result
