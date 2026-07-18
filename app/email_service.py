@@ -1,53 +1,92 @@
 """
-email_service.py — SMTP email for admin staff invites and admin password reset only.
+email_service.py — All transactional email via the Resend HTTP API.
+
+Used for:
+  - Admin staff invites and admin password reset
+  - App auth emails (signup confirm, recovery, etc.) via the Supabase Send Email hook
 """
 
 from __future__ import annotations
 
-import smtplib
-from email.message import EmailMessage
 from typing import Optional
 
+import httpx
+
 from app.config import (
-    ADMIN_INVITE_FROM_EMAIL,
     ADMIN_UI_URL,
-    SMTP_HOST,
-    SMTP_PASSWORD,
-    SMTP_PORT,
-    SMTP_USER,
+    RESEND_API_KEY,
+    RESEND_FROM_EMAIL,
     logger,
 )
 
-_SSL_PORTS = frozenset({465, 2465})
-_STARTTLS_PORTS = frozenset({25, 587, 2587})
+RESEND_API_URL = "https://api.resend.com/emails"
 
 
-def _smtp_login_user() -> str:
-    """Resend SMTP username is always the literal string ``resend``."""
-    if SMTP_USER:
-        return SMTP_USER
-    if "resend.com" in SMTP_HOST.lower():
-        return "resend"
-    return ""
+def resend_configured() -> bool:
+    return bool(RESEND_API_KEY and RESEND_FROM_EMAIL)
 
 
-def _send_via_smtp(msg: EmailMessage) -> None:
-    login_user = _smtp_login_user()
-    if SMTP_PORT in _SSL_PORTS:
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as server:
-            if login_user and SMTP_PASSWORD:
-                server.login(login_user, SMTP_PASSWORD)
-            server.send_message(msg)
-        return
+def send_email(
+    *,
+    to_email: str,
+    subject: str,
+    text: str,
+    html: str,
+) -> tuple[bool, Optional[str]]:
+    """
+    Send one email through Resend. Returns (sent, error_or_none).
+    When Resend is not configured, returns (False, None) so callers can fall back
+    (e.g. show the link in the admin UI).
+    """
+    to = to_email.strip()
+    if not to:
+        return False, "Missing recipient"
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
-        server.ehlo()
-        if SMTP_PORT in _STARTTLS_PORTS:
-            server.starttls()
-            server.ehlo()
-        if login_user and SMTP_PASSWORD:
-            server.login(login_user, SMTP_PASSWORD)
-        server.send_message(msg)
+    if not RESEND_FROM_EMAIL:
+        logger.warning(
+            "Email not sent (RESEND_FROM_EMAIL missing). to=%s subject=%s",
+            to,
+            subject,
+        )
+        return False, None
+
+    if not RESEND_API_KEY:
+        logger.warning(
+            "Email not sent (RESEND_API_KEY missing). to=%s subject=%s",
+            to,
+            subject,
+        )
+        return False, "RESEND_API_KEY not configured"
+
+    payload = {
+        "from": RESEND_FROM_EMAIL,
+        "to": [to],
+        "subject": subject,
+        "text": text,
+        "html": html,
+    }
+    headers = {
+        "Authorization": f"Bearer {RESEND_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.post(RESEND_API_URL, json=payload, headers=headers)
+        if resp.status_code >= 400:
+            detail = resp.text[:500]
+            logger.error(
+                "Resend API error status=%s to=%s body=%s",
+                resp.status_code,
+                to,
+                detail,
+            )
+            return False, f"Resend HTTP {resp.status_code}: {detail}"
+        logger.info("Email sent via Resend to %s subject=%s", to, subject)
+        return True, None
+    except Exception as exc:
+        logger.exception("Failed to send email via Resend to %s: %s", to, exc)
+        return False, str(exc)
 
 
 def send_admin_invite_email(
@@ -57,7 +96,7 @@ def send_admin_invite_email(
 ) -> tuple[bool, Optional[str]]:
     """
     Send admin invite email. Returns (sent, error_or_none).
-    When SMTP is not configured, returns (False, None) and logs the link.
+    When Resend is not configured, returns (False, None) and logs the link.
     """
     subject = "You're invited to Sentient Admin"
     body = f"""Hello,
@@ -79,36 +118,15 @@ This link expires in 72 hours. If you did not expect this email, ignore it.
 <p>This link expires in 72 hours.</p>
 <p>— Sentient Ops</p>"""
 
-    if not SMTP_HOST or not ADMIN_INVITE_FROM_EMAIL:
+    if not resend_configured():
         logger.warning(
-            "Admin invite email not sent (SMTP not configured). Invite URL for %s: %s",
+            "Admin invite email not sent (Resend not configured). Invite URL for %s: %s",
             to_email,
             invite_url,
         )
-        return False, None
+        return False, None if not RESEND_FROM_EMAIL else "RESEND_API_KEY not configured"
 
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = ADMIN_INVITE_FROM_EMAIL
-    msg["To"] = to_email.strip()
-    msg.set_content(body)
-    msg.add_alternative(html, subtype="html")
-
-    if not SMTP_PASSWORD:
-        logger.warning(
-            "Admin invite email not sent (SMTP_PASSWORD missing). Invite URL for %s: %s",
-            to_email,
-            invite_url,
-        )
-        return False, "SMTP_PASSWORD not configured"
-
-    try:
-        _send_via_smtp(msg)
-        logger.info("Admin invite email sent to %s", to_email)
-        return True, None
-    except Exception as exc:
-        logger.exception("Failed to send admin invite email to %s: %s", to_email, exc)
-        return False, str(exc)
+    return send_email(to_email=to_email, subject=subject, text=body, html=html)
 
 
 def build_admin_invite_url(plain_token: str) -> str:
@@ -147,33 +165,102 @@ This link expires in 24 hours. If you did not request this, ignore this email.
 <p>This link expires in 24 hours.</p>
 <p>— Sentient Ops</p>"""
 
-    if not SMTP_HOST or not ADMIN_INVITE_FROM_EMAIL:
+    if not resend_configured():
         logger.warning(
-            "Admin password reset email not sent (SMTP not configured). Reset URL for %s: %s",
+            "Admin password reset email not sent (Resend not configured). Reset URL for %s: %s",
             to_email,
             reset_url,
         )
-        return False, None
+        return False, None if not RESEND_FROM_EMAIL else "RESEND_API_KEY not configured"
 
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = ADMIN_INVITE_FROM_EMAIL
-    msg["To"] = to_email.strip()
-    msg.set_content(body)
-    msg.add_alternative(html, subtype="html")
+    return send_email(to_email=to_email, subject=subject, text=body, html=html)
 
-    if not SMTP_PASSWORD:
+
+def build_auth_action_email(
+    *,
+    email_action_type: str,
+    confirm_url: str,
+    token: str = "",
+) -> tuple[str, str, str]:
+    """
+    Build (subject, text, html) for a Supabase Auth email action.
+    """
+    action = (email_action_type or "").strip().lower()
+    otp_line = ""
+    otp_html = ""
+    if token:
+        otp_line = f"\nOr enter this code: {token}\n"
+        otp_html = f"<p>Or enter this code: <strong>{token}</strong></p>"
+
+    if action in {"signup", "email_confirmation", "confirm"}:
+        subject = "Confirm your Sentient email"
+        cta = "Confirm your email"
+        intro = "Thanks for signing up for Sentient. Confirm your email to finish creating your account."
+    elif action in {"recovery", "reset_password"}:
+        subject = "Reset your Sentient password"
+        cta = "Reset your password"
+        intro = "We received a request to reset your Sentient password."
+    elif action == "magiclink":
+        subject = "Your Sentient sign-in link"
+        cta = "Sign in to Sentient"
+        intro = "Use this link to sign in to Sentient."
+    elif action == "invite":
+        subject = "You're invited to Sentient"
+        cta = "Accept invite"
+        intro = "You've been invited to Sentient."
+    elif action == "email_change":
+        subject = "Confirm your new Sentient email"
+        cta = "Confirm email change"
+        intro = "Confirm this address to finish updating your Sentient email."
+    elif action == "reauthentication":
+        subject = "Confirm it's you — Sentient"
+        cta = "Confirm"
+        intro = "Confirm this action on your Sentient account."
+    else:
+        subject = "Sentient account action"
+        cta = "Continue"
+        intro = "Complete this action for your Sentient account."
+
+    text = f"""Hello,
+
+{intro}
+
+{cta}:
+{confirm_url}
+{otp_line}
+If you did not request this, you can ignore this email.
+
+— Sentient
+"""
+    html = f"""<p>Hello,</p>
+<p>{intro}</p>
+<p><a href="{confirm_url}">{cta}</a></p>
+<p>Or copy this URL:<br/><code>{confirm_url}</code></p>
+{otp_html}
+<p>If you did not request this, you can ignore this email.</p>
+<p>— Sentient</p>"""
+    return subject, text, html
+
+
+def send_auth_action_email(
+    *,
+    to_email: str,
+    email_action_type: str,
+    confirm_url: str,
+    token: str = "",
+) -> tuple[bool, Optional[str]]:
+    """Send a Supabase Auth action email (signup, recovery, etc.) via Resend."""
+    subject, text, html = build_auth_action_email(
+        email_action_type=email_action_type,
+        confirm_url=confirm_url,
+        token=token,
+    )
+    if not resend_configured():
         logger.warning(
-            "Admin password reset email not sent (SMTP_PASSWORD missing). Reset URL for %s: %s",
+            "Auth email not sent (Resend not configured). type=%s to=%s url=%s",
+            email_action_type,
             to_email,
-            reset_url,
+            confirm_url,
         )
-        return False, "SMTP_PASSWORD not configured"
-
-    try:
-        _send_via_smtp(msg)
-        logger.info("Admin password reset email sent to %s", to_email)
-        return True, None
-    except Exception as exc:
-        logger.exception("Failed to send password reset email to %s: %s", to_email, exc)
-        return False, str(exc)
+        return False, "Resend not configured"
+    return send_email(to_email=to_email, subject=subject, text=text, html=html)

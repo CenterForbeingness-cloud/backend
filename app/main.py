@@ -54,6 +54,7 @@ from app.config import (
     STRIPE_PUBLISHABLE_KEY,
     STRIPE_SECRET_KEY,
     STRIPE_WEBHOOK_SECRET,
+    SUPABASE_SEND_EMAIL_HOOK_SECRET,
 )
 from app.analytics import track, track_purchase_completed
 from app.models import (
@@ -129,6 +130,11 @@ from app.admin_password_reset import (
     complete_password_reset,
     request_password_reset,
     reset_status,
+)
+from app.auth_email_hook import (
+    handle_send_email_payload,
+    parse_hook_json,
+    verify_supabase_hook_signature,
 )
 from app.email_service import (
     build_admin_password_reset_url,
@@ -520,6 +526,39 @@ async def public_marketing_page_view(
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return MarketingPageViewResponse(ok=True, counted=counted, reason=reason)
+
+
+@app.post("/hooks/supabase/send-email")
+async def supabase_send_email_hook(request: Request) -> dict:
+    """
+    Supabase Auth Send Email Hook → Resend API.
+    Enable in Dashboard → Authentication → Hooks → Send Email.
+    """
+    if not SUPABASE_SEND_EMAIL_HOOK_SECRET:
+        raise HTTPException(
+            status_code=503,
+            detail="SUPABASE_SEND_EMAIL_HOOK_SECRET is not configured",
+        )
+
+    body = await request.body()
+    if not verify_supabase_hook_signature(
+        body,
+        webhook_id=request.headers.get("webhook-id"),
+        webhook_timestamp=request.headers.get("webhook-timestamp"),
+        webhook_signature=request.headers.get("webhook-signature"),
+    ):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+    try:
+        payload = parse_hook_json(body)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid hook payload") from exc
+
+    ok, err = handle_send_email_payload(payload)
+    if not ok:
+        logger.error("Supabase send-email hook failed: %s", err)
+        raise HTTPException(status_code=500, detail=err or "Failed to send email")
+    return {"ok": True}
 
 
 @app.get("/billing/return/success", response_class=HTMLResponse)

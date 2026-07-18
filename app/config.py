@@ -78,11 +78,20 @@ ADMIN_UI_URL = os.getenv(
     "ADMIN_UI_URL",
     "https://backend-production-2df9.up.railway.app/admin/ui",
 ).strip()
-ADMIN_INVITE_FROM_EMAIL = os.getenv("ADMIN_INVITE_FROM_EMAIL", "").strip()
-SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER", "").strip()
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
+# Resend HTTP API — all transactional email (admin + app auth via Send Email hook)
+RESEND_API_KEY = (
+    os.getenv("RESEND_API_KEY", "").strip()
+    or os.getenv("SMTP_PASSWORD", "").strip()  # legacy SMTP-to-Resend fallback
+)
+_resend_from = os.getenv("RESEND_FROM_EMAIL", "").strip()
+_admin_from = os.getenv("ADMIN_INVITE_FROM_EMAIL", "").strip()
+RESEND_FROM_EMAIL = _resend_from or _admin_from
+# Kept as alias so older call sites / docs still resolve.
+ADMIN_INVITE_FROM_EMAIL = RESEND_FROM_EMAIL
+# Supabase Auth → Send Email Hook signing secret (v1,whsec_...)
+SUPABASE_SEND_EMAIL_HOOK_SECRET = os.getenv(
+    "SUPABASE_SEND_EMAIL_HOOK_SECRET", ""
+).strip()
 
 MARKETING_BEACON_SECRET = os.getenv("MARKETING_BEACON_SECRET", "").strip()
 RATE_LIMIT_MARKETING = os.getenv("RATE_LIMIT_MARKETING", "120/minute")
