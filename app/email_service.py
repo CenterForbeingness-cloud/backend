@@ -189,8 +189,21 @@ def build_auth_action_email(
     otp_line = ""
     otp_html = ""
     if token:
-        otp_line = f"\nOr enter this code: {token}\n"
-        otp_html = f"<p>Or enter this code: <strong>{token}</strong></p>"
+        if action in {"recovery", "reset_password"}:
+            otp_line = (
+                f"\nPreferred on mobile: enter this code in Sentient:\n{token}\n\n"
+                "Or open the link below on the same phone where you tapped Forgot password "
+                "(do not sign out or reinstall before opening the link).\n"
+            )
+            otp_html = (
+                f"<p><strong>Preferred on mobile:</strong> enter this code in Sentient:</p>"
+                f"<p style=\"font-size:28px;letter-spacing:4px;\"><strong>{token}</strong></p>"
+                "<p>Or open the link below on the <em>same phone</em> where you tapped "
+                "Forgot password. Do not sign out or reinstall before opening the link.</p>"
+            )
+        else:
+            otp_line = f"\nOr enter this code: {token}\n"
+            otp_html = f"<p>Or enter this code: <strong>{token}</strong></p>"
 
     if action in {"signup", "email_confirmation", "confirm"}:
         subject = "Confirm your Sentient email"
