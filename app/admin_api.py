@@ -2,7 +2,7 @@
 admin_api.py — Phase 5 admin routes (minimal v1).
 
 Protected endpoints require Authorization: Bearer <admin_token> from
-POST /admin/auth/verify-totp. See docs/ADMIN_V1_SPEC.md.
+POST /admin/auth/verify-totp. See documentation/Admin/ADMIN_V1_SPEC.md.
 """
 
 from __future__ import annotations

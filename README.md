@@ -2,18 +2,18 @@
 
 FastAPI backend for the AI chat companion, billing, course context (RAG), and sessions.
 
-**Status (May 2026):** See [`BACKEND_8_10_SUMMARY.md`](../BACKEND_8_10_SUMMARY.md) for the honest split:
+**Status (May 2026):** See [`BACKEND_8_10_SUMMARY.md`](../documentation/ExecutiveSummary/BACKEND_8_10_SUMMARY.md) for the honest split:
 
 | | Score |
 |---|-------|
 | Infrastructure (auth, chat, Stripe, entitlements, RAG, deploy) | **~9/10** |
 | Product moat (profile + memory foundation) | **~4/10** | Phase 1 profile + Phase 2 tables/events wired; extraction pipeline still Phase 2+ |
 
-**Build order:** [`MVP_NORTH_STAR.md`](../MVP_NORTH_STAR.md) · [`docs/MVP_LAUNCH_SCOPE.md`](../docs/MVP_LAUNCH_SCOPE.md)
+**Build order:** [`MVP_NORTH_STAR.md`](../documentation/ExecutiveSummary/MVP_NORTH_STAR.md) · [`documentation/ExecutiveSummary/MVP_LAUNCH_SCOPE.md`](../documentation/ExecutiveSummary/MVP_LAUNCH_SCOPE.md)
 
 **MVP Launch backend:** Track B `user_profile` + Track C **voice+RAG** (same `/chat` path) + Track D **analytics** — not admin UI.
 
-**Launch gates:** [`SECURITY_AND_REMAINING_WORK.md`](../SECURITY_AND_REMAINING_WORK.md) (Tracks A–D)
+**Launch gates:** [`SECURITY_AND_REMAINING_WORK.md`](../documentation/Security/SECURITY_AND_REMAINING_WORK.md) (Tracks A–D)
 
 ---
 
@@ -34,7 +34,7 @@ Backend is deployed as a separate service from the Flutter app.
 Flutter (Dart) connects to this backend over HTTP/WebSocket APIs.
 Keep frontend and backend release pipelines independent.
 
-For deploying from this monorepo, splitting into a second Git repo, and staging vs production readiness, see **`docs/BACKEND_DEPLOYMENT_AND_REPO_SPLIT.md`**.
+For deploying from this monorepo, splitting into a second Git repo, and staging vs production readiness, see **`documentation/ExecutiveSummary/BACKEND_DEPLOYMENT_AND_REPO_SPLIT.md`**.
 
 Companion-first product direction:
 
@@ -64,7 +64,7 @@ Companion-first product direction:
 - `GET /profile` — thin companion memory (Phase 1)
 - `PATCH /profile` — update goals / focus
 
-**Admin (internal ops)** — see `docs/ADMIN_IMPLEMENTATION_STATUS.md` and `docs/ADMIN_V1_SPEC.md`
+**Admin (internal ops)** — see `documentation/Admin/ADMIN_IMPLEMENTATION_STATUS.md` and `documentation/Admin/ADMIN_V1_SPEC.md`
 
 - Auth: `POST /admin/auth/login`, `POST /admin/auth/verify-totp`
 - Users: `GET /admin/users`, `GET /admin/users/{user_id}`, grant and revoke entitlements
@@ -96,7 +96,7 @@ Daily practice was slow (~20s) mainly due to many sequential Supabase round-trip
 - Background quota and progress timestamp updates
 - Smaller prompts for daily lessons (no base script duplicate, 6-message history cap)
 
-See **`docs/CHAT_PERFORMANCE.md`** for targets, measurement commands, and the remaining roadmap (streaming, regional deploy).
+See **`documentation/AI/CHAT_PERFORMANCE.md`** for targets, measurement commands, and the remaining roadmap (streaming, regional deploy).
 
 Optional env:
 
@@ -259,7 +259,7 @@ Schedule day themes inject **only** when the client sends `daily_practice: true`
 | Daily practice | `true` | — | yes (themes) | yes (guide mode) |
 | Lesson | — | set | no | yes (week scope) |
 
-Env: `SCHEDULE_MODE=guide` (default). See `docs/GUIDE_MODE_DEPLOY.md`.
+Env: `SCHEDULE_MODE=guide` (default). See `documentation/ExecutiveSummary/GUIDE_MODE_DEPLOY.md`.
 
 Example daily practice request:
 
@@ -316,7 +316,7 @@ Stripe CLI and webhook testing guide:
 
 ### Deferred
 
-- Admin console Phases 1–2 shipped; Phase 3 schedules and analytics summary not yet (`docs/ADMIN_IMPLEMENTATION_STATUS.md`)
+- Admin console Phases 1–2 shipped; Phase 3 schedules and analytics summary not yet (`documentation/Admin/ADMIN_IMPLEMENTATION_STATUS.md`)
 - Voice, advanced RAG, full DB course catalog (optional)
 
 ### Protected chat sequence (today)
