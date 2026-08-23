@@ -18,20 +18,19 @@ def get_current_user(
     """
     from app.config import AUTH_ENFORCED, SUPABASE_JWT_SECRET, SUPABASE_URL
 
-    if not AUTH_ENFORCED:
+    if credentials is None:
+        if AUTH_ENFORCED:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authorization header required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         return None
 
-    if not SUPABASE_JWT_SECRET:
+    if not SUPABASE_JWT_SECRET and AUTH_ENFORCED:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Auth is enforced but SUPABASE_JWT_SECRET is not configured",
-        )
-
-    if credentials is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authorization header required",
-            headers={"WWW-Authenticate": "Bearer"},
         )
 
     try:

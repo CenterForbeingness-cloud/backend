@@ -95,6 +95,7 @@ from app.models import (
     UsageResponse,
     UserProfileResponse,
     UserProfileUpdateRequest,
+    BenOnboardingCompleteRequest,
     WeekItem,
     MarketingPageViewRequest,
     MarketingPageViewResponse,
@@ -118,7 +119,10 @@ from app.entitlements import (
 )
 from app.quotas import get_usage_info
 from app.user_profile import (
+    BenOnboardingValidationError,
+    complete_ben_onboarding,
     get_user_profile,
+    profile_ben_onboarding_complete,
     profile_has_launch_memory,
     upsert_user_profile,
 )
@@ -253,7 +257,12 @@ def _current_user_id(user: Optional[dict]) -> str | None:
 def _profile_response(user_id: str) -> UserProfileResponse:
     profile = get_user_profile(user_id)
     if profile is None:
-        return UserProfileResponse(user_id=user_id, has_launch_memory=False)
+        return UserProfileResponse(
+            user_id=user_id,
+            has_launch_memory=False,
+            ben_onboarding=None,
+            ben_onboarding_complete=False,
+        )
     return UserProfileResponse(
         user_id=profile.user_id,
         display_name=profile.display_name,
@@ -262,6 +271,8 @@ def _profile_response(user_id: str) -> UserProfileResponse:
         current_focus=profile.current_focus,
         energy_level=profile.energy_level,
         motivation_type=profile.motivation_type,
+        ben_onboarding=profile.ben_onboarding,
+        ben_onboarding_complete=profile_ben_onboarding_complete(profile),
         has_launch_memory=profile_has_launch_memory(profile),
         created_at=profile.created_at,
         updated_at=profile.updated_at,
@@ -1386,11 +1397,41 @@ def update_profile(
 
     try:
         upsert_user_profile(user_id, fields)
+    except BenOnboardingValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         logger.error("Profile update failed: %s", exc)
         raise HTTPException(
             status_code=503,
             detail="Profile storage unavailable. Run sql/supabase_user_profile.sql.",
+        ) from exc
+
+    return _profile_response(user_id)
+
+
+@app.post("/profile/onboarding/complete", response_model=UserProfileResponse)
+def complete_profile_onboarding(
+    body: Optional[BenOnboardingCompleteRequest] = None,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> UserProfileResponse:
+    """Validate all six Ben answers and set ben_onboarding.completed_at."""
+    user_id = _current_user_id(_user)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        if body and body.ben_onboarding is not None:
+            patch = body.ben_onboarding.model_dump(exclude_unset=True)
+            if patch:
+                upsert_user_profile(user_id, {"ben_onboarding": patch})
+        complete_ben_onboarding(user_id)
+    except BenOnboardingValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        logger.error("Onboarding complete failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Profile storage unavailable. Run sql/supabase_ben_onboarding.sql.",
         ) from exc
 
     return _profile_response(user_id)

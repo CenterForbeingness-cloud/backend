@@ -31,7 +31,8 @@ from app.analytics import track_chat_message, track_rag_retrieval
 from app.rag import RetrievalResult, load_base_script
 from app.storage import SessionAccessError
 from app.memory import load_memory_prompt_block
-from app.user_profile import load_profile_prompt_block
+from app.user_profile import format_profile_system_block, get_user_profile, load_profile_prompt_block
+from app.coaching_voice import assemble_companion_system_prompt
 
 _BASE_SCRIPT = load_base_script()
 
@@ -43,6 +44,24 @@ def _load_companion_context_block(user_id: Optional[str]) -> Optional[str]:
     if not parts:
         return None
     return "\n\n".join(parts)
+
+
+def _companion_onboarding_and_memory(
+    user_id: Optional[str],
+) -> tuple[Optional[dict], Optional[str]]:
+    if not user_id:
+        return None, None
+    profile = get_user_profile(user_id)
+    profile_block = format_profile_system_block(profile)
+    memory = load_memory_prompt_block(user_id)
+    parts = [p for p in (profile_block, memory) if p]
+    memory_block = "\n\n".join(parts) if parts else None
+    onboarding = profile.ben_onboarding if profile else None
+    return onboarding, memory_block
+
+
+def _is_companion_turn(ctx: ChatContext) -> bool:
+    return not ctx.req.course_slug
 
 
 @dataclass
@@ -245,8 +264,19 @@ def produce_reply(
         )
 
     retrieval = _fetch_retrieval(context_retriever, ctx)
-    profile_block = _load_companion_context_block(ctx.user_id)
     guide_mode = SCHEDULE_MODE == "guide"
+    companion_system = None
+    profile_block = None
+    if _is_companion_turn(ctx):
+        onboarding, profile_memory = _companion_onboarding_and_memory(ctx.user_id)
+        companion_system = assemble_companion_system_prompt(
+            onboarding,
+            base_script=_BASE_SCRIPT,
+            profile_memory_block=profile_memory,
+            retrieved_context=retrieval.contexts,
+        )
+    else:
+        profile_block = _load_companion_context_block(ctx.user_id)
 
     try:
         reply = generate_reply(
@@ -258,6 +288,7 @@ def produce_reply(
             schedule_system_block=ctx.schedule_system_block,
             profile_system_block=profile_block,
             schedule_guide_mode=guide_mode,
+            system_prompt=companion_system,
         )
     except Exception as exc:
         logger.exception("generate_reply failed: %s", exc)
@@ -353,8 +384,19 @@ def iter_llm_sse(
 ) -> Iterator[str]:
     """Stream OpenAI tokens when not on the script engine."""
     retrieval = _fetch_retrieval(context_retriever, ctx)
-    profile_block = _load_companion_context_block(ctx.user_id)
     guide_mode = SCHEDULE_MODE == "guide"
+    companion_system = None
+    profile_block = None
+    if _is_companion_turn(ctx):
+        onboarding, profile_memory = _companion_onboarding_and_memory(ctx.user_id)
+        companion_system = assemble_companion_system_prompt(
+            onboarding,
+            base_script=_BASE_SCRIPT,
+            profile_memory_block=profile_memory,
+            retrieved_context=retrieval.contexts,
+        )
+    else:
+        profile_block = _load_companion_context_block(ctx.user_id)
 
     parts: List[str] = []
     try:
@@ -367,6 +409,7 @@ def iter_llm_sse(
             schedule_system_block=ctx.schedule_system_block,
             profile_system_block=profile_block,
             schedule_guide_mode=guide_mode,
+            system_prompt=companion_system,
         ):
             parts.append(token)
             payload = json.dumps({"type": "token", "content": token})

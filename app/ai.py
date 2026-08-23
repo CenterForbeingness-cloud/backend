@@ -3,6 +3,32 @@ from typing import Dict, List, Optional
 
 from app.config import CHAT_MODEL, CHAT_MODEL_SCHEDULE
 
+
+GENERIC_ASSISTANT_LINE = (
+    "You are a calm meditation assistant. Keep responses concise, safe, and on-brand."
+)
+
+
+def _default_system_prompt(
+    *,
+    base_script: Optional[str] = None,
+    schedule_system_block: Optional[str] = None,
+    profile_system_block: Optional[str] = None,
+    retrieved_context: Optional[List[str]] = None,
+) -> str:
+    system_prompt = GENERIC_ASSISTANT_LINE
+    if profile_system_block:
+        system_prompt = f"{system_prompt}\n\n{profile_system_block}"
+    # Daily lessons ship a full script block; skip the long base script to cut tokens and latency.
+    if base_script and not schedule_system_block:
+        system_prompt = f"{system_prompt}\n\n[Grounded Base Script]\n{base_script}"
+    if schedule_system_block:
+        system_prompt = f"{system_prompt}\n\n{schedule_system_block}"
+    if retrieved_context:
+        context_block = "\n\n".join(retrieved_context)
+        system_prompt = f"{system_prompt}\n\n[Additional context]\n{context_block}"
+    return system_prompt
+
 _openai_client = None
 _anthropic_client = None
 
@@ -35,20 +61,15 @@ def generate_reply(
     schedule_system_block: Optional[str] = None,
     profile_system_block: Optional[str] = None,
     schedule_guide_mode: bool = False,
+    system_prompt: Optional[str] = None,
 ) -> str:
-    system_prompt = (
-        "You are a calm meditation assistant. Keep responses concise, safe, and on-brand."
-    )
-    if profile_system_block:
-        system_prompt = f"{system_prompt}\n\n{profile_system_block}"
-    # Daily lessons ship a full script block; skip the long base script to cut tokens and latency.
-    if base_script and not schedule_system_block:
-        system_prompt = f"{system_prompt}\n\n[Grounded Base Script]\n{base_script}"
-    if schedule_system_block:
-        system_prompt = f"{system_prompt}\n\n{schedule_system_block}"
-    if retrieved_context:
-        context_block = "\n\n".join(retrieved_context)
-        system_prompt = f"{system_prompt}\n\n[Additional context]\n{context_block}"
+    if system_prompt is None:
+        system_prompt = _default_system_prompt(
+            base_script=base_script,
+            schedule_system_block=schedule_system_block,
+            profile_system_block=profile_system_block,
+            retrieved_context=retrieved_context,
+        )
 
     temperature = (
         0.5
@@ -107,20 +128,16 @@ def generate_reply_stream(
     schedule_system_block: Optional[str] = None,
     profile_system_block: Optional[str] = None,
     schedule_guide_mode: bool = False,
+    system_prompt: Optional[str] = None,
 ):
     """Yield text deltas from the LLM (OpenAI streaming; Claude falls back to one chunk)."""
-    system_prompt = (
-        "You are a calm meditation assistant. Keep responses concise, safe, and on-brand."
-    )
-    if profile_system_block:
-        system_prompt = f"{system_prompt}\n\n{profile_system_block}"
-    if base_script and not schedule_system_block:
-        system_prompt = f"{system_prompt}\n\n[Grounded Base Script]\n{base_script}"
-    if schedule_system_block:
-        system_prompt = f"{system_prompt}\n\n{schedule_system_block}"
-    if retrieved_context:
-        context_block = "\n\n".join(retrieved_context)
-        system_prompt = f"{system_prompt}\n\n[Additional context]\n{context_block}"
+    if system_prompt is None:
+        system_prompt = _default_system_prompt(
+            base_script=base_script,
+            schedule_system_block=schedule_system_block,
+            profile_system_block=profile_system_block,
+            retrieved_context=retrieved_context,
+        )
 
     temperature = (
         0.5
@@ -165,5 +182,6 @@ def generate_reply_stream(
         schedule_system_block=schedule_system_block,
         profile_system_block=profile_system_block,
         schedule_guide_mode=schedule_guide_mode,
+        system_prompt=system_prompt,
     )
     yield text

@@ -1,5 +1,6 @@
 -- Thin memory (Phase 1): one row per user.
 -- Run in Supabase SQL Editor after auth is enabled.
+-- Existing databases: also run sql/supabase_ben_onboarding.sql.
 
 create table if not exists public.user_profile (
   user_id uuid primary key references auth.users (id) on delete cascade,
@@ -9,6 +10,10 @@ create table if not exists public.user_profile (
   current_focus text,
   energy_level text,
   motivation_type text,
+  -- Ben six-question onboarding. Keys: path_stage, primary_reason,
+  -- prior_experience (text[]), language_preference, desired_value,
+  -- practice_time, tradition_detail, completed_at, version.
+  ben_onboarding jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

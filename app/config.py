@@ -96,6 +96,10 @@ SUPABASE_SEND_EMAIL_HOOK_SECRET = os.getenv(
 MARKETING_BEACON_SECRET = os.getenv("MARKETING_BEACON_SECRET", "").strip()
 RATE_LIMIT_MARKETING = os.getenv("RATE_LIMIT_MARKETING", "120/minute")
 
+# Ben coaching voice (companion turns). File is gitignored; stub is used if missing.
+BEN_MASTER_PROMPT_PATH = os.getenv("BEN_MASTER_PROMPT_PATH", "").strip()
+BEN_MASTER_SYSTEM_PROMPT = os.getenv("BEN_MASTER_SYSTEM_PROMPT", "").strip()
+
 # Voice (MVP Launch) — POST /chat/voice
 VOICE_ENABLED = os.getenv("VOICE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 VOICE_MAX_RECORDING_SEC = int(os.getenv("VOICE_MAX_RECORDING_SEC", "90"))

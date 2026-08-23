@@ -184,6 +184,32 @@ class UsageResponse(BaseModel):
     voice_reset_at: Optional[datetime] = None
 
 
+class BenOnboardingData(BaseModel):
+    path_stage: Optional[str] = None
+    primary_reason: Optional[str] = None
+    prior_experience: Optional[list[str]] = None
+    language_preference: Optional[str] = None
+    desired_value: Optional[str] = None
+    practice_time: Optional[str] = None
+    tradition_detail: Optional[str] = None
+    completed_at: Optional[datetime] = None
+    version: Optional[str] = None
+
+
+class BenOnboardingPatch(BaseModel):
+    path_stage: Optional[str] = None
+    primary_reason: Optional[str] = None
+    prior_experience: Optional[list[str]] = None
+    language_preference: Optional[str] = None
+    desired_value: Optional[str] = None
+    practice_time: Optional[str] = None
+    tradition_detail: Optional[str] = Field(default=None, max_length=500)
+
+
+class BenOnboardingCompleteRequest(BaseModel):
+    ben_onboarding: Optional[BenOnboardingPatch] = None
+
+
 class UserProfileResponse(BaseModel):
     user_id: str
     display_name: Optional[str] = None
@@ -192,6 +218,8 @@ class UserProfileResponse(BaseModel):
     current_focus: Optional[str] = None
     energy_level: Optional[str] = None
     motivation_type: Optional[str] = None
+    ben_onboarding: Optional[BenOnboardingData] = None
+    ben_onboarding_complete: bool = False
     has_launch_memory: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -204,6 +232,7 @@ class UserProfileUpdateRequest(BaseModel):
     current_focus: Optional[str] = Field(default=None, max_length=500)
     energy_level: Optional[str] = Field(default=None, max_length=80)
     motivation_type: Optional[str] = Field(default=None, max_length=80)
+    ben_onboarding: Optional[BenOnboardingPatch] = None
 
 
 class ChatTokenResponse(BaseModel):
