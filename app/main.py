@@ -146,6 +146,7 @@ from app.email_service import (
 )
 from app.rate_limit import AUTH_LIMIT, BILLING_LIMIT, CHAT_LIMIT, MARKETING_LIMIT, SESSIONS_LIMIT, limiter
 from app.marketing_traffic import record_page_view
+from app.production_gates import assert_production_phase1_security_gates
 from app.voice import (
     assert_voice_enabled,
     check_voice_quota,
@@ -193,6 +194,8 @@ context_retriever = build_context_retriever()
 
 @app.on_event("startup")
 def _startup_db_pool() -> None:
+    # Hardening Phase 1 items 1 to 7.
+    assert_production_phase1_security_gates()
     if AUTH_ENFORCED and not CHAT_TOKEN_SECRET and CHAT_TOKEN_ENFORCED:
         raise RuntimeError(
             "CHAT_TOKEN_ENFORCED=true but no chat token secret is configured"

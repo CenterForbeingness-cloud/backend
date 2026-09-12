@@ -25,6 +25,12 @@ DEFAULT_PROVIDER = os.getenv("AI_PROVIDER", "openai").lower()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL") or os.getenv("DATABASE_URL")
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
+# development (default) keeps local boots open. production refuses insecure login settings.
+ENVIRONMENT = (
+    os.getenv("ENVIRONMENT") or os.getenv("SENTIENT_ENV") or "development"
+).strip().lower()
+RAILWAY_ENVIRONMENT = (os.getenv("RAILWAY_ENVIRONMENT") or "").strip()
+
 AUTH_ENFORCED = os.getenv("AUTH_ENFORCED", "false").lower() in {"1", "true", "yes", "on"}
 CHAT_TOKEN_ENFORCED = os.getenv("CHAT_TOKEN_ENFORCED", "false").lower() in {"1", "true", "yes", "on"}
 RAG_ENABLED = os.getenv("RAG_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
@@ -42,6 +48,8 @@ CHAT_TOKEN_TTL_SECONDS = int(os.getenv("CHAT_TOKEN_TTL_SECONDS", "900"))
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY") or os.getenv("STRIPE_API_KEY")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
+# Production must declare test or live. Keys must match that stage (Phase 1 item 6).
+PAYMENT_STAGE = (os.getenv("PAYMENT_STAGE") or "").strip().lower()
 
 # Per-course Stripe Price IDs (fallback when course_products rows are not seeded yet).
 STRIPE_PRICE_BY_COURSE_SLUG: dict[str, str] = {
@@ -109,3 +117,4 @@ ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID_DEFAULT = os.getenv("ELEVENLABS_VOICE_ID_DEFAULT", "")
 ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")

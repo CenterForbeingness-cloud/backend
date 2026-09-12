@@ -128,6 +128,22 @@ def load_master_system_prompt() -> str:
     )
 
 
+def master_prompt_is_production_ready() -> bool:
+    """
+    True when the proprietary master prompt is available (not the public stub).
+
+    Accepts BEN_MASTER_SYSTEM_PROMPT, BEN_MASTER_PROMPT_PATH, or the default v1 file.
+    """
+    if (BEN_MASTER_SYSTEM_PROMPT or "").strip():
+        return True
+
+    override = (BEN_MASTER_PROMPT_PATH or "").strip()
+    if override:
+        return bool(_read_prompt_file(Path(override)))
+
+    return bool(_read_prompt_file(_DEFAULT_MASTER_PATH))
+
+
 def format_onboarding_profile_block(onboarding: Optional[dict[str, Any]]) -> Optional[str]:
     """[BEN ONBOARDING] block. None until completed_at is set."""
     if not onboarding or not onboarding.get("completed_at"):
