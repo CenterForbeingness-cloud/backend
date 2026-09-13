@@ -169,9 +169,7 @@ If using port 8001, replace `8000` with `8001` in the URLs above.
 }
 ```
 
-If API keys are missing, backend returns a fallback echo so you can test app wiring first.
-
-If provider requests fail (for example quota/auth issues), backend also returns MVP fallback text instead of HTTP 500.
+If API keys are missing or the provider call fails, the backend returns HTTP 503 (or a stream error event) with `AI unavailable. Please try again.` It does not return a fake success echo.
 
 ## RAG Scaffold
 

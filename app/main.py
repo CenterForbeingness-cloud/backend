@@ -32,12 +32,12 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from app.chat_service import (
+    finalize_chat_turn,
     iter_llm_sse,
     iter_scripted_sse,
     prepare_chat_context,
     process_chat_turn,
-    produce_reply,
-    finalize_chat_turn,
+    try_scripted_reply,
 )
 from app.auth import create_chat_token, get_chat_user, get_current_user
 from app.config import (
@@ -146,7 +146,11 @@ from app.email_service import (
 )
 from app.rate_limit import AUTH_LIMIT, BILLING_LIMIT, CHAT_LIMIT, MARKETING_LIMIT, SESSIONS_LIMIT, limiter
 from app.marketing_traffic import record_page_view
-from app.production_gates import assert_production_phase1_security_gates
+from app.production_gates import (
+    assert_production_phase1_security_gates,
+    assert_production_phase4_storage_gates,
+    is_production,
+)
 from app.voice import (
     assert_voice_enabled,
     check_voice_quota,
@@ -196,6 +200,8 @@ context_retriever = build_context_retriever()
 def _startup_db_pool() -> None:
     # Hardening Phase 1 items 1 to 7.
     assert_production_phase1_security_gates()
+    # Hardening Phase 4: Postgres is truth for chat and course catalog.
+    assert_production_phase4_storage_gates(chat_store)
     if AUTH_ENFORCED and not CHAT_TOKEN_SECRET and CHAT_TOKEN_ENFORCED:
         raise RuntimeError(
             "CHAT_TOKEN_ENFORCED=true but no chat token secret is configured"
@@ -488,10 +494,16 @@ def favicon() -> Response:
 
 @app.get("/health")
 def health() -> dict:
+    storage_name = chat_store.__class__.__name__
+    persistent = storage_name == "PostgresChatStore"
+    ok = True
+    if is_production() and not persistent:
+        ok = False
     return {
-        "ok": True,
+        "ok": ok,
         "service": "sentient-backend",
-        "storage": chat_store.__class__.__name__,
+        "storage": storage_name,
+        "persistent_storage": persistent,
     }
 
 
@@ -631,16 +643,16 @@ def chat_stream(
         ctx = prepare_chat_context(
             req, user_id, chat_store, default_provider=DEFAULT_PROVIDER
         )
-        reply, provider_used, scripted, _retrieval = produce_reply(
-            ctx, context_retriever
-        )
-        if scripted:
+        # Scripted path: one script reply. LLM path: stream only (do not call
+        # produce_reply first — that would generate a full reply then discard it).
+        scripted = try_scripted_reply(ctx)
+        if scripted is not None:
             result = finalize_chat_turn(
                 ctx,
-                reply,
+                scripted,
                 chat_store,
                 background_tasks,
-                provider_used=provider_used,
+                provider_used="script",
                 scripted=True,
             )
             yield from iter_scripted_sse(result, req.session_id)

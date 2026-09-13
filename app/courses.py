@@ -21,11 +21,18 @@ except ImportError:  # pragma: no cover
 
 
 def _log_db_fallback(context: str, exc: Exception) -> None:
-    """Filesystem fallback is expected until course catalog SQL is applied."""
+    """Filesystem fallback is expected in local development until SQL is applied."""
     if isinstance(exc, UndefinedTable) or "does not exist" in str(exc).lower():
         logger.warning("%s: using filesystem course catalog (%s)", context, exc)
         return
     logger.exception("%s: falling back to filesystem course catalog", context)
+
+
+def _allow_filesystem_catalog() -> bool:
+    """Production must use the database catalog only (Hardening Phase 4)."""
+    from app.production_gates import is_production
+
+    return not is_production()
 
 
 # Default: three levels up from backend/app/ project root rag/raw/courses
@@ -206,7 +213,14 @@ def list_courses() -> list[dict]:
         try:
             return _apply_env_price_fallbacks(_list_courses_from_db())
         except Exception as exc:
+            if not _allow_filesystem_catalog():
+                raise
             _log_db_fallback("list_courses", exc)
+    elif not _allow_filesystem_catalog():
+        raise RuntimeError(
+            "Production requires SUPABASE_DB_URL for the course catalog. "
+            "Refusing filesystem catalog fallback."
+        )
 
     courses_dir = _courses_dir()
     if not courses_dir.exists():
@@ -243,8 +257,18 @@ def get_course_detail(course_slug: str) -> Optional[dict]:
             detail = _course_detail_from_db(course_slug)
             if detail is not None:
                 return detail
+            # In production, missing DB row means not found — do not invent from disk.
+            if not _allow_filesystem_catalog():
+                return None
         except Exception as exc:
+            if not _allow_filesystem_catalog():
+                raise
             _log_db_fallback(f"get_course_detail({course_slug})", exc)
+    elif not _allow_filesystem_catalog():
+        raise RuntimeError(
+            "Production requires SUPABASE_DB_URL for the course catalog. "
+            "Refusing filesystem catalog fallback."
+        )
 
     courses_dir = _courses_dir()
     course_dir = courses_dir / course_slug

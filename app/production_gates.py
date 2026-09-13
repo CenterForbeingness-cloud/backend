@@ -233,6 +233,53 @@ def assert_production_master_prompt() -> None:
         )
 
 
+def assert_production_persistent_chat_store(chat_store) -> None:
+    """
+    Hardening Phase 4.
+
+    Production must use Postgres chat storage. In-memory is for local development only.
+    """
+    if not is_production():
+        return
+
+    from app.storage import PostgresChatStore
+
+    if not isinstance(chat_store, PostgresChatStore):
+        raise RuntimeError(
+            "Production requires Postgres chat storage. "
+            f"Got {type(chat_store).__name__}. Refusing in-memory or other fallbacks."
+        )
+
+
+def assert_production_course_catalog_from_database() -> None:
+    """
+    Hardening Phase 4.
+
+    Production must read the course catalog from Postgres. A successful query is required
+    (an empty published list is allowed). Filesystem course folders are not a production source.
+    """
+    if not is_production():
+        return
+
+    from app import config
+
+    if not (config.SUPABASE_DB_URL or "").strip():
+        raise RuntimeError(
+            "Production requires SUPABASE_DB_URL for the course catalog."
+        )
+
+    try:
+        from app.courses import _list_courses_from_db
+
+        _list_courses_from_db()
+    except Exception as exc:
+        raise RuntimeError(
+            "Production course catalog database query failed. "
+            "Apply course catalog SQL and refuse filesystem fallback. "
+            f"Detail: {exc}"
+        ) from exc
+
+
 def assert_production_phase1_security_gates() -> None:
     """Run Phase 1 items 1 to 7 at startup."""
     assert_production_login_enforced()
@@ -242,3 +289,9 @@ def assert_production_phase1_security_gates() -> None:
     assert_production_ai_credentials()
     assert_production_payment_stage()
     assert_production_master_prompt()
+
+
+def assert_production_phase4_storage_gates(chat_store) -> None:
+    """Run Phase 4 persistent storage gates at startup."""
+    assert_production_persistent_chat_store(chat_store)
+    assert_production_course_catalog_from_database()

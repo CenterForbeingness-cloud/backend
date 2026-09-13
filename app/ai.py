@@ -1,7 +1,20 @@
+import logging
 import os
 from typing import Dict, List, Optional
 
 from app.config import CHAT_MODEL, CHAT_MODEL_SCHEDULE
+
+logger = logging.getLogger(__name__)
+
+AI_UNAVAILABLE_MESSAGE = "AI unavailable. Please try again."
+
+
+class AIUnavailableError(RuntimeError):
+    """Raised when the model provider is missing or fails. Never treat as a normal reply."""
+
+    def __init__(self, detail: str = AI_UNAVAILABLE_MESSAGE):
+        super().__init__(detail)
+        self.detail = detail
 
 
 GENERIC_ASSISTANT_LINE = (
@@ -51,6 +64,13 @@ def _get_anthropic_client():
     return _anthropic_client
 
 
+def _raise_unavailable(reason: str, *, cause: Optional[BaseException] = None) -> None:
+    logger.error("AI unavailable: %s", reason, exc_info=cause is not None)
+    if cause is not None:
+        raise AIUnavailableError(AI_UNAVAILABLE_MESSAGE) from cause
+    raise AIUnavailableError(AI_UNAVAILABLE_MESSAGE)
+
+
 def generate_reply(
     latest_message: str,
     history: List[Dict[str, str]],
@@ -82,7 +102,7 @@ def generate_reply(
     if provider == "openai":
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
-            return f"[MVP fallback] You said: {latest_message}"
+            _raise_unavailable("OPENAI_API_KEY is not configured")
 
         client = _get_openai_client()
         messages = [{"role": "system", "content": system_prompt}] + history
@@ -94,13 +114,15 @@ def generate_reply(
                 max_tokens=max_tokens,
             )
             return response.choices[0].message.content or ""
-        except Exception:
-            return f"[MVP fallback] You said: {latest_message}"
+        except AIUnavailableError:
+            raise
+        except Exception as exc:
+            _raise_unavailable(f"OpenAI request failed: {exc}", cause=exc)
 
     if provider == "claude":
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
-            return f"[MVP fallback] You said: {latest_message}"
+            _raise_unavailable("ANTHROPIC_API_KEY is not configured")
 
         client = _get_anthropic_client()
         try:
@@ -112,8 +134,10 @@ def generate_reply(
             )
             text_blocks = [b.text for b in response.content if getattr(b, "type", "") == "text"]
             return "\n".join(text_blocks).strip() or ""
-        except Exception:
-            return f"[MVP fallback] You said: {latest_message}"
+        except AIUnavailableError:
+            raise
+        except Exception as exc:
+            _raise_unavailable(f"Anthropic request failed: {exc}", cause=exc)
 
     raise ValueError("Unsupported provider. Use 'openai' or 'claude'.")
 
@@ -150,8 +174,7 @@ def generate_reply_stream(
     if provider == "openai":
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
-            yield f"[MVP fallback] You said: {latest_message}"
-            return
+            _raise_unavailable("OPENAI_API_KEY is not configured")
 
         client = _get_openai_client()
         messages = [{"role": "system", "content": system_prompt}] + history
@@ -168,9 +191,10 @@ def generate_reply_stream(
                 if delta:
                     yield delta
             return
-        except Exception:
-            yield f"[MVP fallback] You said: {latest_message}"
-            return
+        except AIUnavailableError:
+            raise
+        except Exception as exc:
+            _raise_unavailable(f"OpenAI stream failed: {exc}", cause=exc)
 
     # Claude: no streaming in this path — single completion
     text = generate_reply(

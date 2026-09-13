@@ -321,15 +321,37 @@ class PostgresChatStore:
 
 
 def build_chat_store() -> ChatStore:
+    """
+    Prefer Postgres when SUPABASE_DB_URL is set.
+
+    Local development may use in-memory storage if the URL is missing or init fails.
+    Production never falls back to in-memory (Hardening Phase 4).
+    """
+    from app.production_gates import is_production
+
+    production = is_production()
+
     if not SUPABASE_DB_URL:
+        if production:
+            raise RuntimeError(
+                "Production requires SUPABASE_DB_URL for chat storage. "
+                "Refusing in-memory chat store."
+            )
         logger.info("SUPABASE_DB_URL not set; using in-memory chat storage")
         return InMemoryChatStore(MAX_MEMORY_MESSAGES)
 
     store = PostgresChatStore(SUPABASE_DB_URL)
     try:
         store.init()
-    except Exception:
-        logger.exception("Failed to initialize Postgres chat storage; using in-memory fallback")
+    except Exception as exc:
+        if production:
+            raise RuntimeError(
+                "Production Postgres chat storage failed to initialize. "
+                "Refusing in-memory fallback so failures stay visible."
+            ) from exc
+        logger.exception(
+            "Failed to initialize Postgres chat storage; using in-memory fallback"
+        )
         return InMemoryChatStore(MAX_MEMORY_MESSAGES)
 
     logger.info("Using Postgres chat storage")

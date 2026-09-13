@@ -10,7 +10,8 @@ from typing import Iterator, List, Optional
 
 from fastapi import BackgroundTasks, HTTPException
 
-from app.ai import generate_reply, generate_reply_stream
+from app.ai import AIUnavailableError, AI_UNAVAILABLE_MESSAGE, generate_reply, generate_reply_stream
+
 from app.config import (
     FAIR_USE_LIMIT,
     MAX_MEMORY_MESSAGES,
@@ -195,7 +196,8 @@ def _fetch_retrieval(
     return retrieval
 
 
-def _scripted_reply(ctx: ChatContext) -> Optional[str]:
+def try_scripted_reply(ctx: ChatContext) -> Optional[str]:
+    """Return a script-engine reply when applicable; otherwise None (use LLM)."""
     if SCHEDULE_MODE == "guide":
         return None
     if not SCHEDULE_SCRIPT_ENGINE:
@@ -252,7 +254,7 @@ def produce_reply(
     context_retriever,
 ) -> tuple[str, str, bool, RetrievalResult]:
     """Return (reply, provider_used, scripted, retrieval)."""
-    scripted = _scripted_reply(ctx)
+    scripted = try_scripted_reply(ctx)
     if scripted is not None:
         return scripted, "script", True, RetrievalResult()
 
@@ -290,10 +292,15 @@ def produce_reply(
             schedule_guide_mode=guide_mode,
             system_prompt=companion_system,
         )
+    except AIUnavailableError as exc:
+        logger.error("AI unavailable for chat turn: %s", exc)
+        raise HTTPException(
+            status_code=503, detail=AI_UNAVAILABLE_MESSAGE
+        ) from exc
     except Exception as exc:
         logger.exception("generate_reply failed: %s", exc)
         raise HTTPException(
-            status_code=500, detail="AI service error. Please try again."
+            status_code=503, detail=AI_UNAVAILABLE_MESSAGE
         ) from exc
 
     return reply, ctx.provider, False, retrieval
@@ -383,6 +390,12 @@ def iter_llm_sse(
     background_tasks: BackgroundTasks,
 ) -> Iterator[str]:
     """Stream OpenAI tokens when not on the script engine."""
+    if ctx.req.course_slug and ctx.schedule_day and SCHEDULE_MODE == "script":
+        logger.warning(
+            "falling back to LLM for course=%s day=%s — fix schedule import or beats",
+            ctx.req.course_slug,
+            ctx.schedule_day_number,
+        )
     retrieval = _fetch_retrieval(context_retriever, ctx)
     guide_mode = SCHEDULE_MODE == "guide"
     companion_system = None
@@ -414,10 +427,17 @@ def iter_llm_sse(
             parts.append(token)
             payload = json.dumps({"type": "token", "content": token})
             yield f"data: {payload}\n\n"
+    except AIUnavailableError as exc:
+        logger.error("AI unavailable for stream turn: %s", exc)
+        payload = json.dumps(
+            {"type": "error", "message": AI_UNAVAILABLE_MESSAGE}
+        )
+        yield f"data: {payload}\n\n"
+        return
     except Exception as exc:
         logger.exception("generate_reply_stream failed: %s", exc)
         payload = json.dumps(
-            {"type": "error", "message": "AI service error. Please try again."}
+            {"type": "error", "message": AI_UNAVAILABLE_MESSAGE}
         )
         yield f"data: {payload}\n\n"
         return
