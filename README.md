@@ -185,18 +185,20 @@ Environment flags for scaffold control:
 
 ## Course Catalog And Billing
 
+> **Truth banner (September 2026):** Locked commercial model is trial + **$14.99/mo** via Apple and Google. Companion Plus/Pro and free dialogue tiers are cancelled. See `documentation/STATUS/PRODUCT_DECISIONS_LOCKED.md`. One-time Stripe course paths may remain for legacy SKUs. In production the course catalog must come from Postgres (no silent filesystem fallback).
+
 The backend course catalog is still available, but it now serves the broader companion experience as support content rather than the app's primary product.
 
-The backend course catalog now prefers the Supabase course tables when `SUPABASE_DB_URL` is configured.
-If that database connection is unavailable, it falls back to the local `rag/raw/courses/` directory so development still works.
+The backend course catalog prefers the Supabase course tables when `SUPABASE_DB_URL` is configured.
+Local development may fall back to `rag/raw/courses/` if the database path fails. Production refuses that silent fallback (Hardening Phase 4).
 
 The pricing flow should remain course-aware, but the product story is companion-first:
 
 - `GET /courses` returns published course metadata plus pricing fields when present in the database.
 - `GET /entitlements` returns the authenticated user's owned course slugs.
 - `POST /billing/payment-intent` and `POST /billing/checkout` both accept a `course_slug` so the backend can attach purchase metadata.
-- Future pricing tiers may also cover companion features such as advanced memory, check-ins, summaries, and voice.
-- The frontend pricing screen can render both companion tiers and course support content as the product evolves.
+- Future access is trial / subscription based per locked decisions, not Free / Plus / Pro companion tiers.
+- Frontend pricing screens may still contain older tier copy until the store subscription UI ships.
 
 For Supabase deployments, the relevant schema is documented in `backend/sql/supabase_courses_billing_rls.sql`.
 
