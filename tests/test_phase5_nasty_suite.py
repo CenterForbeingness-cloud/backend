@@ -650,10 +650,6 @@ def test_chat_stream_performs_one_generation_for_normal_turn() -> None:
     mock_generate.assert_not_called()
     mock_stream.assert_called_once()
 
-
-# --- Phase 5 item 11: production storage failure stays explicit ---
-
-
 def test_production_chat_store_init_failure_is_explicit() -> None:
     """Phase 5 item 11: Postgres init failure in production raises; no silent memory store."""
     import pytest
@@ -699,10 +695,6 @@ def test_production_phase4_storage_gates_reject_in_memory_store() -> None:
     ):
         with pytest.raises(RuntimeError, match="Postgres chat storage"):
             assert_production_phase4_storage_gates(InMemoryChatStore(10))
-
-
-# --- Phase 5 item 12: daily practice entitlement + guide schedule ---
-
 
 def test_daily_practice_without_entitlement_is_blocked() -> None:
     """Phase 5 item 12: daily practice still requires course entitlement."""

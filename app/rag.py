@@ -103,9 +103,9 @@ class PineconeRetriever:
     Retrieves relevant content chunks from Pinecone with optional course/week filtering.
 
     Pinecone metadata filter logic:
-      - No course_slug supplied  base namespace only (fallback / general chat)
-      - course_slug supplied     courses namespace, filtered by course_slug
-      - week_number also supplied additionally filter by week_number
+      - No course_slug supplied  → ben namespace (companion home and companion voice)
+      - course_slug supplied     → courses namespace, filtered by course_slug
+      - week_number also supplied → additionally filter by week_number
     """
 
     def __init__(self) -> None:
@@ -141,7 +141,7 @@ class PineconeRetriever:
             if week_number is not None:
                 meta_filter["week_number"] = {"$eq": week_number}
         else:
-            meta_filter = {"namespace": {"$eq": "base"}}
+            meta_filter = {"namespace": {"$eq": "ben"}}
 
         try:
             result = self._index.query(

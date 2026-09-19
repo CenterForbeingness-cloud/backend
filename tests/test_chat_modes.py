@@ -6,6 +6,7 @@ import pytest
 
 from app.chat_service import prepare_chat_context, produce_reply
 from app.models import ChatRequest
+from app.rag import RetrievalHit, RetrievalResult
 from app.user_profile import UserProfile
 
 
@@ -124,7 +125,9 @@ def test_companion_completed_onboarding_injected_into_system_prompt(
     )
     req = ChatRequest(session_id="s1", message="Are you Ben?")
     ctx = prepare_chat_context(req, "user-1", _mock_store(), default_provider="openai")
-    produce_reply(ctx, MagicMock())
+    retriever = MagicMock()
+    retriever.retrieve.return_value = RetrievalResult()
+    produce_reply(ctx, retriever)
 
     system_prompt = mock_reply.call_args.kwargs["system_prompt"]
     assert system_prompt is not None
@@ -134,6 +137,8 @@ def test_companion_completed_onboarding_injected_into_system_prompt(
     assert "finding_my_way" in system_prompt
     assert "searching_deeper" in system_prompt
     assert "calm meditation assistant" not in system_prompt
+    retriever.retrieve.assert_called_once()
+    assert retriever.retrieve.call_args.kwargs.get("course_slug") in (None, "")
 
 
 @patch("app.chat_service.generate_reply", return_value="ok")
@@ -152,13 +157,49 @@ def test_companion_incomplete_onboarding_skips_profile_block(
     )
     req = ChatRequest(session_id="s1", message="Hello")
     ctx = prepare_chat_context(req, "user-1", _mock_store(), default_provider="openai")
-    produce_reply(ctx, MagicMock())
+    retriever = MagicMock()
+    retriever.retrieve.return_value = RetrievalResult()
+    produce_reply(ctx, retriever)
 
     system_prompt = mock_reply.call_args.kwargs["system_prompt"]
     assert "[SAFETY]" in system_prompt
     assert "emergency" in system_prompt.lower()
     assert "[BEN ONBOARDING]" not in system_prompt
     assert "[BEN PERSONALISATION]" not in system_prompt
+
+
+@patch("app.chat_service.generate_reply", return_value="ok")
+@patch("app.chat_service.load_memory_prompt_block", return_value=None)
+@patch("app.chat_service.get_user_profile")
+@patch("app.chat_service.check_quota", return_value=True)
+def test_companion_retrieves_ben_context_into_system_prompt(
+    _quota,
+    mock_profile,
+    _memory,
+    mock_reply,
+):
+    mock_profile.return_value = UserProfile(
+        user_id="user-1",
+        ben_onboarding=_COMPLETED_ONBOARDING,
+    )
+    req = ChatRequest(session_id="s1", message="What is awareness?")
+    ctx = prepare_chat_context(req, "user-1", _mock_store(), default_provider="openai")
+    retriever = MagicMock()
+    retriever.retrieve.return_value = RetrievalResult(
+        contexts=["Awareness is already present."],
+        retrievals=[
+            RetrievalHit(id="ben-1", score=0.9, source_type="text", lesson="awareness")
+        ],
+    )
+    produce_reply(ctx, retriever)
+
+    system_prompt = mock_reply.call_args.kwargs["system_prompt"]
+    assert "[Additional context]" in system_prompt
+    assert "Awareness is already present." in system_prompt
+    retriever.retrieve.assert_called_once()
+    call_kwargs = retriever.retrieve.call_args.kwargs
+    assert call_kwargs["course_slug"] is None
+    assert call_kwargs["week_number"] is None
 
 
 @patch("app.chat_service.generate_reply", return_value="ok")
@@ -176,5 +217,10 @@ def test_lesson_chat_does_not_use_companion_system_prompt(
         week_number=1,
     )
     ctx = prepare_chat_context(req, "user-1", _mock_store(), default_provider="openai")
-    produce_reply(ctx, MagicMock())
+    retriever = MagicMock()
+    retriever.retrieve.return_value = RetrievalResult()
+    produce_reply(ctx, retriever)
     assert mock_reply.call_args.kwargs["system_prompt"] is None
+    retriever.retrieve.assert_called_once()
+    assert retriever.retrieve.call_args.kwargs["course_slug"] == "week-zero-reset"
+    assert retriever.retrieve.call_args.kwargs["week_number"] == 1

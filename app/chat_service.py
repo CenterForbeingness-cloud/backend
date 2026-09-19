@@ -168,12 +168,12 @@ def _fetch_retrieval(
     context_retriever,
     ctx: ChatContext,
 ) -> RetrievalResult:
-    if not ctx.req.course_slug:
-        return RetrievalResult()
-
+    # Companion home and companion voice (no course) retrieve from the ben namespace.
+    # Lesson and daily practice retrieve from courses, filtered by course_slug.
     use_rag = True
     if (
-        ctx.schedule_system_block
+        ctx.req.course_slug
+        and ctx.schedule_system_block
         and SCHEDULE_MODE == "script"
         and ctx.req.week_number is None
     ):
