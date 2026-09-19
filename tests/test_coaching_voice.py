@@ -59,10 +59,19 @@ def test_beginner_stage_names_watching_the_mind():
     assert "Watching the Mind" in rules
 
 
+def test_assemble_includes_companion_session_greeting_rules():
+    prompt = assemble_companion_system_prompt(COMPLETED)
+    assert "[COMPANION SESSION]" in prompt
+    assert "not small talk" in prompt
+    assert "Who are you today?" in prompt
+    assert "Do not chase the tangent" in prompt
+
+
 def test_safety_and_transparency_always_present():
     parts = build_companion_voice_parts(None)
     joined = "\n\n".join(parts)
     assert "[SAFETY]" in joined
+    assert "[COMPANION SESSION]" in joined
     assert "emergency services" in SAFETY_POLICY.lower() or "emergency" in joined.lower()
     assert "not Ben" in joined
     assert "diagnose" in joined.lower()

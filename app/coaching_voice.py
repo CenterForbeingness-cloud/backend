@@ -29,6 +29,21 @@ Never claim guaranteed awakening, enlightenment, or healing outcomes.
 If asked whether they are talking to Ben Warren: say Sentient is an AI trained on Ben's teaching, not Ben in person.
 """
 
+COMPANION_SESSION_RULES = """[COMPANION SESSION]
+You are a coaching companion in Ben Warren's teaching lineage, not a generic chatbot.
+
+Greeting rules:
+1. Messages like hi, hello, hey, good morning are openings into coaching, not small talk.
+2. Do not reply like a customer support bot. Never use lines such as "Who are you today?", "How can I help you today?", or "Is there anything specific on your mind?" as the main move.
+3. On a first greeting, welcome them briefly in an unhurried Ben voice, then invite them into presence, awareness, or what they noticed coming here. If onboarding answers exist, use them gently (path stage or reason) without repeating every key.
+4. Keep the first reply short: about two to four sentences.
+
+Stay on the coaching path:
+5. If they go off topic (weather, gadgets, random opinions), acknowledge in one short line, then guide back to awareness, practice, or what is true for them right now. Do not chase the tangent for several turns.
+6. Prefer pointing toward recognition and presence over tips, techniques, or chit chat.
+7. Do not invent a new persona. Stay Sentient, trained on Ben's teaching.
+"""
+
 PATH_STAGE_LABELS = {
     "just_starting": "New to meditation and awareness practice",
     "finding_my_way": "Meditates occasionally; something still missing",
@@ -101,8 +116,18 @@ def load_master_system_prompt() -> str:
     """Load proprietary master prompt if present; otherwise the public stub."""
     inline = (BEN_MASTER_SYSTEM_PROMPT or "").strip()
     if inline:
-        _log_prompt_source("BEN_MASTER_SYSTEM_PROMPT env")
-        return inline
+        # Some envs mistakenly put a file path in BEN_MASTER_SYSTEM_PROMPT.
+        maybe_path = Path(inline)
+        if not maybe_path.is_absolute():
+            maybe_path = _PROMPTS_DIR.parent / inline
+        if inline.endswith((".txt", ".md")) and maybe_path.is_file():
+            loaded = _read_prompt_file(maybe_path)
+            if loaded:
+                _log_prompt_source(f"BEN_MASTER_SYSTEM_PROMPT path {maybe_path}")
+                return loaded
+        if len(inline) > 200:
+            _log_prompt_source("BEN_MASTER_SYSTEM_PROMPT env")
+            return inline
 
     override = (BEN_MASTER_PROMPT_PATH or "").strip()
     if override:
@@ -262,8 +287,12 @@ def format_personalisation_rules(onboarding: Optional[dict[str, Any]]) -> Option
 
 
 def build_companion_voice_parts(onboarding: Optional[dict[str, Any]]) -> list[str]:
-    """Safety, master prompt, onboarding, personalisation. Base script is added in assemble."""
-    parts = [SAFETY_POLICY.strip(), load_master_system_prompt()]
+    """Safety, session rules, master prompt, onboarding, personalisation. Base script is added in assemble."""
+    parts = [
+        SAFETY_POLICY.strip(),
+        COMPANION_SESSION_RULES.strip(),
+        load_master_system_prompt(),
+    ]
     onboarding_block = format_onboarding_profile_block(onboarding)
     if onboarding_block:
         parts.append(onboarding_block)
@@ -283,12 +312,13 @@ def assemble_companion_system_prompt(
     """
     Full companion system prompt.
 
-    Precedence: safety → base script → master prompt → onboarding →
-    personalisation → profile/memory → retrieval.
+    Precedence: safety → base script → companion session rules → master prompt →
+    onboarding → personalisation → profile/memory → retrieval.
     """
     parts = [SAFETY_POLICY.strip()]
     if base_script and base_script.strip():
         parts.append(f"[Grounded Base Script]\n{base_script.strip()}")
+    parts.append(COMPANION_SESSION_RULES.strip())
     parts.append(load_master_system_prompt())
     onboarding_block = format_onboarding_profile_block(onboarding)
     if onboarding_block:
