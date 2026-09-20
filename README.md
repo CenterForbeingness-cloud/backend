@@ -173,15 +173,35 @@ If API keys are missing or the provider call fails, the backend returns HTTP 503
 
 ## RAG Scaffold
 
-The backend includes a retriever seam at `app/rag.py` used by `/chat`.
-It currently defaults to a no-op retriever, so behavior is unchanged until you plug in Pinecone/Weaviate.
+The backend retrieves teaching chunks from Pinecone via `app/rag.py` and injects them into companion and course chat.
 
-To add retrieval later, implement `retrieve(query, top_k)` in a retriever class and return context chunks.
-Those chunks are injected into the system prompt in `app/ai.py`.
+**Important:** adding `.txt` / `.md` files under `rag/raw/` does **not** update production by itself. Postgres does not store those transcripts. You must embed into Pinecone after every batch of new files.
 
-Environment flags for scaffold control:
-- `RAG_ENABLED=false`
+### After you add or change Ben teaching files
+
+From the monorepo root (use the backend virtualenv):
+
+```bash
+cd "/Users/thomasgee/Sentent/Sentient app"
+./backend/.venv/bin/python rag/scripts/embed.py
+```
+
+What that does:
+- Reads `rag/raw/ben/**/*.txt` and `*.md` (and base / courses folders)
+- Chunks, embeds, upserts into the Pinecone index named by `PINECONE_INDEX_NAME` in `backend/.env`
+- Writes a manifest under `rag/processed/manifests/`
+
+If Railway uses the same `PINECONE_API_KEY` and `PINECONE_INDEX_NAME`, the live app can retrieve the new chunks immediately. No Railway redeploy is required for corpus updates.
+
+Companion home retrieves namespace `ben`. Lesson chat retrieves namespace `courses`.
+
+Environment flags:
+- `RAG_ENABLED=true`
 - `RAG_TOP_K=3`
+- `PINECONE_API_KEY=...`
+- `PINECONE_INDEX_NAME=sentient-content`
+
+Folder layout: see `rag/raw/README.txt` and `rag/raw/ben/README.txt`.
 
 ## Course Catalog And Billing
 

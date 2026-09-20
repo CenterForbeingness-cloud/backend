@@ -217,6 +217,16 @@ def _startup_db_pool() -> None:
         )
     if RATE_LIMIT_ENABLED:
         logger.info("IP rate limiting enabled")
+    # Force one master prompt load at boot so Railway logs always show the source.
+    from app.coaching_voice import load_master_system_prompt, master_prompt_is_production_ready
+
+    prompt = load_master_system_prompt()
+    logger.info(
+        "Startup companion prompt ready=%s length=%s retriever=%s",
+        master_prompt_is_production_ready(),
+        len(prompt or ""),
+        context_retriever.__class__.__name__,
+    )
     init_db_pool()
 
 
@@ -494,6 +504,8 @@ def favicon() -> Response:
 
 @app.get("/health")
 def health() -> dict:
+    from app.coaching_voice import master_prompt_is_production_ready
+
     storage_name = chat_store.__class__.__name__
     persistent = storage_name == "PostgresChatStore"
     ok = True
@@ -504,6 +516,8 @@ def health() -> dict:
         "service": "sentient-backend",
         "storage": storage_name,
         "persistent_storage": persistent,
+        "companion_master_prompt_ready": master_prompt_is_production_ready(),
+        "retriever": context_retriever.__class__.__name__,
     }
 
 
