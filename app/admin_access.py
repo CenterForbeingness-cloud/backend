@@ -1,5 +1,5 @@
 """
-admin_access.py — Network restriction for /admin/* (A7).
+admin_access.py Network restriction for /admin/* (A7).
 
 Set ADMIN_ALLOWED_IPS to a comma-separated allowlist. When unset, all IPs are
 allowed (local dev). GET /admin/health is exempt from the allowlist check.

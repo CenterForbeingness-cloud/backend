@@ -62,9 +62,31 @@ def test_beginner_stage_names_watching_the_mind():
 def test_assemble_includes_companion_session_greeting_rules():
     prompt = assemble_companion_system_prompt(COMPLETED)
     assert "[COMPANION SESSION]" in prompt
-    assert "not small talk" in prompt
+    assert "not a general assistant" in prompt
     assert "Who are you today?" in prompt
-    assert "Do not chase the tangent" in prompt
+    assert "What is on your mind today?" in prompt
+    assert "How can I assist you?" in prompt
+
+
+def test_assemble_includes_stay_on_path_off_topic_rules():
+    prompt = assemble_companion_system_prompt(COMPLETED)
+    assert "Off topic and hobbies (absolute — zero chase)" in prompt
+    assert "at most one short acknowledge clause" in prompt
+    assert "Never ask any question about the off topic subject" in prompt
+    assert "What are you building?" in prompt
+    assert "Zero content that continues the hobby" in prompt
+    assert "we can talk about that elsewhere" in prompt
+    assert "Do not invent a helpful project" in prompt
+    assert "Never treat enthusiasm about an off topic thing as a cue to help" in prompt
+
+
+def test_assemble_includes_who_are_you_and_disclosure_rules():
+    prompt = assemble_companion_system_prompt(COMPLETED)
+    assert "If asked who you are / are you Ben" in prompt
+    assert "not Ben in person" in prompt
+    assert "one coaching invite" in prompt
+    assert "No \"what is on your mind\" after disclosure" in prompt
+    assert "Every reply must end in coaching" in prompt
 
 
 def test_safety_and_transparency_always_present():
