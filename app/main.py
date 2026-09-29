@@ -89,6 +89,9 @@ from app.models import (
     BundlePurchaseEligibility,
     EntitlementResponse,
     LessonItem,
+    MediaCatalogItem,
+    MediaCatalogResponse,
+    MediaPlaybackResponse,
     SessionListResponse,
     SessionMessagesResponse,
     SessionResponse,
@@ -1300,6 +1303,42 @@ def list_courses_endpoint() -> CourseListResponse:
     return CourseListResponse(
         courses=[_course_item_from_dict(c) for c in list_courses()]
     )
+
+
+@app.get("/media", response_model=MediaCatalogResponse)
+def list_media_endpoint(
+    _user: Optional[dict] = Depends(get_current_user),
+) -> MediaCatalogResponse:
+    """List Foundations media keys with Mux playback IDs configured."""
+    from app.mux_media import list_media_catalog
+
+    return MediaCatalogResponse(
+        items=[MediaCatalogItem(**item) for item in list_media_catalog()]
+    )
+
+
+@app.get("/media/{content_key}/playback", response_model=MediaPlaybackResponse)
+def get_media_playback_endpoint(
+    content_key: str,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> MediaPlaybackResponse:
+    """
+    Return an HLS URL for a Foundations media item.
+
+    Meditate in 5 and Foundations media stay available after trial (locked
+    decisions). Auth is required in production; local may omit when
+    AUTH_ENFORCED=false. Signed playback turns on with MUX_SIGNED_PLAYBACK.
+    """
+    from app.mux_media import resolve_playback
+
+    try:
+        payload = resolve_playback(content_key)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return MediaPlaybackResponse(**payload)
 
 
 @app.get("/courses/{course_slug}", response_model=CourseDetailResponse)

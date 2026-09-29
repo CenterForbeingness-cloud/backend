@@ -118,3 +118,28 @@ ELEVENLABS_VOICE_ID_DEFAULT = os.getenv("ELEVENLABS_VOICE_ID_DEFAULT", "")
 ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+# Mux Video (Foundations media hosting). Token ID/Secret stay on the server only.
+MUX_TOKEN_ID = os.getenv("MUX_TOKEN_ID", "").strip()
+MUX_TOKEN_SECRET = os.getenv("MUX_TOKEN_SECRET", "").strip()
+# Optional RSA signing key for private playback JWTs (dashboard → Signing Keys).
+MUX_SIGNING_KEY_ID = os.getenv("MUX_SIGNING_KEY_ID", "").strip()
+MUX_SIGNING_PRIVATE_KEY = os.getenv("MUX_SIGNING_PRIVATE_KEY", "").strip()
+# Content key → Mux playback ID. Override in env as the library grows.
+MUX_PLAYBACK_BY_CONTENT_KEY: dict[str, str] = {
+    key: playback_id
+    for key, env_name, default in (
+        (
+            "meditate-in-5",
+            "MUX_PLAYBACK_MEDITATE_IN_5",
+            "00HJmW8D0246aAezlSXDaKKfUZTcBAD02KBoJhaEsfzAsU",
+        ),
+    )
+    if (playback_id := (os.getenv(env_name, "") or default).strip())
+}
+MUX_SIGNED_PLAYBACK = os.getenv("MUX_SIGNED_PLAYBACK", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}

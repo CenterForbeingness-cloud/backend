@@ -132,6 +132,26 @@ class CourseProgressResponse(BaseModel):
     max_day_number: Optional[int] = None
     day_title: Optional[str] = None
     duration_minutes: Optional[int] = None
+
+
+class MediaCatalogItem(BaseModel):
+    content_key: str
+    title: str
+    playback_id: str
+    host: str = "mux"
+
+
+class MediaCatalogResponse(BaseModel):
+    items: list[MediaCatalogItem] = Field(default_factory=list)
+
+
+class MediaPlaybackResponse(BaseModel):
+    content_key: str
+    title: str
+    playback_id: str
+    playback_url: str
+    signed: bool = False
+    host: str = "mux"
     welcome_message: Optional[str] = None
 
 
