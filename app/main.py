@@ -114,6 +114,7 @@ from app.entitlements import (
     apply_purchase_grant,
     apply_purchase_revoke,
     assert_bundle_purchase_allowed,
+    assert_course_available_for_purchase,
     bundle_included_slugs,
     check_entitlement,
     evaluate_bundle_purchase_eligibility,
@@ -1069,6 +1070,10 @@ async def billing_checkout(
 
     if metadata_course_slug:
         try:
+            assert_course_available_for_purchase(metadata_course_slug)
+        except ValueError as exc:
+            raise HTTPException(status_code=410, detail=str(exc)) from exc
+        try:
             assert_bundle_purchase_allowed(user_id, metadata_course_slug)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1177,6 +1182,10 @@ async def billing_payment_intent(
     metadata: dict[str, str] = {}
     metadata_course_slug = resolved_course_slug or req.course_slug
     if metadata_course_slug:
+        try:
+            assert_course_available_for_purchase(metadata_course_slug)
+        except ValueError as exc:
+            raise HTTPException(status_code=410, detail=str(exc)) from exc
         try:
             assert_bundle_purchase_allowed(user_id, metadata_course_slug)
         except ValueError as exc:

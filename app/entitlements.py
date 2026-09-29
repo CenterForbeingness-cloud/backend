@@ -13,6 +13,16 @@ from app.config import SUPABASE_DB_URL, logger
 # Product SKUs (Stripe) that are not daily-schedule courses.
 PRODUCT_ONLY_SLUGS: frozenset[str] = frozenset({"starter-bundle"})
 
+# Retired from new sale (locked product decisions). Keep entitlement grants for existing owners.
+RETIRED_FROM_SALE_COURSE_SLUGS: frozenset[str] = frozenset(
+    {
+        "week-zero-reset",
+        "deep-calm-protocol",
+        "focus-discipline",
+        "starter-bundle",
+    }
+)
+
 # Courses unlocked when a bundle SKU is purchased (also lazy-synced on GET /entitlements).
 BUNDLE_INCLUDED_COURSES: dict[str, tuple[str, ...]] = {
     "starter-bundle": (
@@ -28,6 +38,25 @@ _schema_bootstrapped = False
 
 def is_product_only_slug(course_slug: str) -> bool:
     return course_slug in PRODUCT_ONLY_SLUGS
+
+
+def is_retired_from_sale(course_slug: str) -> bool:
+    return (course_slug or "").strip() in RETIRED_FROM_SALE_COURSE_SLUGS
+
+
+def assert_course_available_for_purchase(course_slug: Optional[str]) -> None:
+    """
+    Block new checkouts for retired catalog products.
+
+    Existing owners keep access through entitlement checks elsewhere.
+    """
+    slug = (course_slug or "").strip()
+    if not slug:
+        return
+    if is_retired_from_sale(slug):
+        raise ValueError(
+            "This product is no longer for sale. Existing access is unchanged."
+        )
 
 
 def bundle_included_slugs(bundle_slug: str) -> tuple[str, ...]:

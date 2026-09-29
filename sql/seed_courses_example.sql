@@ -14,25 +14,25 @@ values
     'week-zero-reset',
     'Week Zero Reset',
     'Foundational reset course for building calm daily habits.',
-    true
+    false
   ),
   (
     'deep-calm-protocol',
     'Deep Calm Protocol',
     'Structured practice for deeper relaxation and nervous system regulation.',
-    true
+    false
   ),
   (
     'focus-discipline',
     'Focus & Discipline',
     'Training for attention, consistency, and mindful productivity.',
-    true
+    false
   ),
   (
     'starter-bundle',
     'Starter Bundle',
     'Bundle of core Sentient courses with lifetime access.',
-    true
+    false
   ),
   (
     'mindful-foundations',
