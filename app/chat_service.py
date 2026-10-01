@@ -32,6 +32,7 @@ from app.analytics import track_chat_message, track_rag_retrieval
 from app.rag import RetrievalResult, load_base_script
 from app.storage import SessionAccessError
 from app.memory import load_memory_prompt_block
+from app.user_access import require_chat_access
 from app.user_profile import format_profile_system_block, get_user_profile, load_profile_prompt_block
 from app.coaching_voice import assemble_companion_system_prompt
 
@@ -95,6 +96,10 @@ def prepare_chat_context(
     default_provider: str,
 ) -> ChatContext:
     provider = req.provider or default_provider
+
+    # Trial or subscription required for all chat (companion and course).
+    # Meditate in 5 Minutes is always free and is not checked here.
+    require_chat_access(user_id)
 
     if user_id and not check_quota(user_id, FAIR_USE_LIMIT):
         logger.warning("Quota exceeded: user=%s", user_id)
@@ -260,7 +265,7 @@ def produce_reply(
 
     if ctx.req.course_slug and ctx.schedule_day and SCHEDULE_MODE == "script":
         logger.warning(
-            "falling back to LLM for course=%s day=%s — fix schedule import or beats",
+            "falling back to LLM for course=%s day=%s  fix schedule import or beats",
             ctx.req.course_slug,
             ctx.schedule_day_number,
         )
@@ -392,7 +397,7 @@ def iter_llm_sse(
     """Stream OpenAI tokens when not on the script engine."""
     if ctx.req.course_slug and ctx.schedule_day and SCHEDULE_MODE == "script":
         logger.warning(
-            "falling back to LLM for course=%s day=%s — fix schedule import or beats",
+            "falling back to LLM for course=%s day=%s  fix schedule import or beats",
             ctx.req.course_slug,
             ctx.schedule_day_number,
         )

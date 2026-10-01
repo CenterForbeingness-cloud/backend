@@ -38,7 +38,7 @@ def main() -> None:
     for row in checks:
         mark = "OK " if row["ok"] else "FAIL"
         req = "required" if row.get("required", True) else "optional"
-        print(f"  [{mark}] {row['gate_id']} {row['name']} ({req}) — {row['detail']}")
+        print(f"  [{mark}] {row['gate_id']} {row['name']} ({req})  {row['detail']}")
 
     blocking = result.get("blocking") or []
     print()

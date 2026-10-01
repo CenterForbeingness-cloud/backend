@@ -1,5 +1,5 @@
 """
-admin_auth.py — Admin authentication with 2FA (TOTP).
+admin_auth.py  Admin authentication with 2FA (TOTP).
 
 Handles admin login, TOTP verification, and JWT token generation.
 All passwords are bcrypt-hashed; TOTP uses RFC 6238 (standard authenticator apps).
@@ -25,11 +25,11 @@ def _get_db_connection():
 def admin_login(email: str, password: str) -> Tuple[Optional[str], Optional[str]]:
     """
     Validate admin credentials and return a session token for 2FA verification.
-    
+
     Args:
         email: Admin email address
         password: Admin password (plaintext, will be bcrypt-verified)
-    
+
     Returns:
         Tuple[session_token, error_message]
         If success: (session_token, None)
@@ -37,7 +37,7 @@ def admin_login(email: str, password: str) -> Tuple[Optional[str], Optional[str]
     """
     try:
         import bcrypt
-        
+
         with _get_db_connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """
@@ -48,11 +48,11 @@ def admin_login(email: str, password: str) -> Tuple[Optional[str], Optional[str]
                 (email,),
             )
             row = cur.fetchone()
-            
+
             if row is None:
                 logger.warning("Admin login failed: email not found or inactive: %s", email)
                 return None, "Invalid credentials"
-            
+
             admin_id, password_hash, totp_secret, totp_enabled = row
 
             if not totp_enabled:
@@ -70,10 +70,10 @@ def admin_login(email: str, password: str) -> Tuple[Optional[str], Optional[str]
             except Exception as exc:
                 logger.exception("bcrypt verification failed: %s", exc)
                 return None, "Authentication error"
-            
+
             # Generate session token for 2FA challenge
             session_token = secrets.token_urlsafe(32)
-            
+
             # Store session token in a temporary location (in-memory or short-lived cache)
             # For now, we return it and the client must send it back with TOTP code
             # In production, you'd store this in Redis with 10-minute TTL
@@ -87,11 +87,11 @@ def admin_login(email: str, password: str) -> Tuple[Optional[str], Optional[str]
 def verify_totp(email: str, totp_code: str) -> Tuple[Optional[str], Optional[str]]:
     """
     Verify TOTP code and return admin JWT token if successful.
-    
+
     Args:
         email: Admin email address
         totp_code: 6-digit TOTP code from authenticator app
-    
+
     Returns:
         Tuple[admin_token, error_message]
         If success: (admin_token, None)
@@ -99,7 +99,7 @@ def verify_totp(email: str, totp_code: str) -> Tuple[Optional[str], Optional[str
     """
     try:
         import pyotp
-        
+
         with _get_db_connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """
@@ -110,27 +110,27 @@ def verify_totp(email: str, totp_code: str) -> Tuple[Optional[str], Optional[str
                 (email,),
             )
             row = cur.fetchone()
-            
+
             if row is None:
                 logger.warning("TOTP verification failed: admin not found or 2FA not enabled: %s", email)
                 return None, "Admin not found"
-            
+
             admin_id, totp_secret, role = row
-            
+
             if not totp_secret:
                 logger.warning("TOTP verification failed: no secret configured for %s", email)
                 return None, "2FA not configured"
-            
+
             # Verify TOTP code (RFC 6238)
             # Allow ±1 time window for clock skew (default pyotp window is 1)
             totp = pyotp.TOTP(totp_secret)
             if not totp.verify(totp_code, valid_window=1):
                 logger.warning("TOTP verification failed: invalid code for %s", email)
                 return None, "Invalid authenticator code"
-            
+
             # Generate admin JWT token
             admin_token = _generate_admin_jwt(admin_id, email, role)
-            
+
             # Update last_login timestamp
             now = datetime.now(timezone.utc)
             try:
@@ -144,7 +144,7 @@ def verify_totp(email: str, totp_code: str) -> Tuple[Optional[str], Optional[str
                 )
             except Exception as exc:
                 logger.warning("Failed to update last_login: %s", exc)
-            
+
             logger.info("Admin login successful with 2FA: %s role=%s", email, role)
             return admin_token, None
     except Exception as exc:
@@ -155,20 +155,20 @@ def verify_totp(email: str, totp_code: str) -> Tuple[Optional[str], Optional[str
 def _generate_admin_jwt(admin_id: str, email: str, role: str) -> str:
     """
     Generate a JWT token for authenticated admin.
-    
+
     Args:
         admin_id: Admin user UUID
         email: Admin email
         role: Admin role ('owner', 'editor', 'viewer')
-    
+
     Returns:
         JWT token string
     """
     import jwt
-    
+
     now = datetime.now(timezone.utc)
     expires = now + timedelta(hours=8)  # 8-hour session
-    
+
     payload = {
         "sub": str(admin_id),
         "email": email,
@@ -177,10 +177,10 @@ def _generate_admin_jwt(admin_id: str, email: str, role: str) -> str:
         "iat": int(now.timestamp()),
         "exp": int(expires.timestamp()),
     }
-    
+
     if not SUPABASE_JWT_SECRET:
         raise ValueError("SUPABASE_JWT_SECRET not configured")
-    
+
     token = jwt.encode(payload, SUPABASE_JWT_SECRET, algorithm="HS256")
     return token
 
@@ -188,26 +188,26 @@ def _generate_admin_jwt(admin_id: str, email: str, role: str) -> str:
 def verify_admin_token(token: str) -> Optional[dict]:
     """
     Verify an admin JWT token and return the payload.
-    
+
     Args:
         token: JWT token string
-    
+
     Returns:
         Payload dict if valid, None if invalid/expired
     """
     import jwt
-    
+
     try:
         if not SUPABASE_JWT_SECRET:
             return None
-        
+
         payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"])
-        
+
         # Verify it's an admin token
         if payload.get("type") != "admin":
             logger.warning("Token verification failed: not an admin token")
             return None
-        
+
         return payload
     except jwt.ExpiredSignatureError:
         logger.info("Admin token expired")
@@ -223,7 +223,7 @@ def create_admin_user(email: str, password: str, role: str) -> Tuple[Optional[st
     TOTP secret must be generated separately via generate_totp_secret().
 
     Returns:
-        Tuple[admin_id, error_message] — admin_id set on success.
+        Tuple[admin_id, error_message]  admin_id set on success.
     """
     allowed = {"owner", "editor", "viewer"}
     if role not in allowed:
@@ -519,9 +519,9 @@ def delete_admin_user(admin_id: str) -> tuple[Optional[dict], Optional[str]]:
 def generate_totp_secret() -> str:
     """
     Generate a new TOTP secret (base32 encoded).
-    
+
     Admin must scan the resulting QR code with an authenticator app.
-    
+
     Returns:
         Base32 TOTP secret string
     """
@@ -532,11 +532,11 @@ def generate_totp_secret() -> str:
 def set_totp_secret(email: str, totp_secret: str) -> Tuple[bool, Optional[str]]:
     """
     Store a TOTP secret for an admin and enable 2FA.
-    
+
     Args:
         email: Admin email
         totp_secret: Base32 TOTP secret (from generate_totp_secret())
-    
+
     Returns:
         Tuple[success, error_message]
     """
@@ -560,11 +560,11 @@ def set_totp_secret(email: str, totp_secret: str) -> Tuple[bool, Optional[str]]:
 def get_totp_provisioning_uri(email: str, issuer: str = "Sentient") -> Optional[str]:
     """
     Generate a provisioning URI for TOTP QR code.
-    
+
     Args:
         email: Admin email (display name)
         issuer: Issuer name for authenticator app
-    
+
     Returns:
         otpauth:// URI for QR code generation
     """

@@ -1,5 +1,5 @@
 """
-launch_gates.py — Track A production readiness checks (env only, no secrets in output).
+launch_gates.py  Track A production readiness checks (env only, no secrets in output).
 """
 
 from __future__ import annotations

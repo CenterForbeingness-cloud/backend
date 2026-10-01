@@ -3,9 +3,9 @@
 from app.lesson_script import coach_reply, parse_lesson_beats
 
 DAY1_SNIPPET = """
-STEP 1 — Check-in:
-Say: "Before we begin, in one short phrase — how are you arriving right now?"
-STEP 2 — Settle:
+STEP 1  Check-in:
+Say: "Before we begin, in one short phrase  how are you arriving right now?"
+STEP 2  Settle:
 Say: "Thank you. Find a comfortable position."
 Then guide breath 1: "Breathe in slowly… and out."
 """

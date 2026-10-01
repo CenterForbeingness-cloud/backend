@@ -1,5 +1,5 @@
 """
-user_profile.py — Phase 1 thin memory plus Ben onboarding JSON on the same row.
+user_profile.py  Phase 1 thin memory plus Ben onboarding JSON on the same row.
 """
 
 from __future__ import annotations

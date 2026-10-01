@@ -1,5 +1,5 @@
 """
-voice_gates.py — Track C readiness checks (env + optional corpus hints, no secrets in output).
+voice_gates.py  Track C readiness checks (env + optional corpus hints, no secrets in output).
 """
 
 from __future__ import annotations

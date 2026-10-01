@@ -22,6 +22,8 @@ def test_chat_stream_llm_path_calls_stream_once_not_full_generate() -> None:
     app.dependency_overrides[get_chat_user] = fake_user
     try:
         with patch("app.main.chat_store", store), patch(
+            "app.chat_service.require_chat_access"
+        ), patch(
             "app.chat_service.check_quota", return_value=True
         ), patch(
             "app.chat_service.try_scripted_reply", return_value=None
@@ -59,6 +61,8 @@ def test_chat_stream_scripted_path_skips_llm() -> None:
     app.dependency_overrides[get_chat_user] = fake_user
     try:
         with patch("app.main.chat_store", store), patch(
+            "app.chat_service.require_chat_access"
+        ), patch(
             "app.chat_service.check_quota", return_value=True
         ), patch(
             "app.chat_service.check_entitlement", return_value=True

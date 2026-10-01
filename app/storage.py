@@ -121,7 +121,7 @@ class PostgresChatStore:
 
     def init(self) -> None:
         """Verify the required tables exist. Schema is managed externally via
-        backend/sql/supabase_chat_rls.sql — do NOT run DDL here because the
+        backend/sql/supabase_chat_rls.sql  do NOT run DDL here because the
         pooler role lacks the privileges needed to reference auth.users."""
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(

@@ -1,5 +1,5 @@
 """
-admin_ops.py — Phase 3 admin ops: analytics summary, quota pressure, schedule health.
+admin_ops.py  Phase 3 admin ops: analytics summary, quota pressure, schedule health.
 """
 
 from __future__ import annotations
@@ -290,7 +290,7 @@ def get_admin_schedule_health(course_slug: str) -> AdminScheduleHealthResponse:
                     AdminScheduleDayRow(
                         day_number=int(row[0]),
                         day_title=row[1],
-                        content_preview=preview or "—",
+                        content_preview=preview or "",
                     )
                 )
     except Exception as exc:

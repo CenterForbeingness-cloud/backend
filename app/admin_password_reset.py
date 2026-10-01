@@ -1,5 +1,5 @@
 """
-admin_password_reset.py — Self-service password reset for existing admin accounts.
+admin_password_reset.py  Self-service password reset for existing admin accounts.
 
 Requires TOTP on completion (same authenticator as login). Separate from invite setup.
 """

@@ -1,5 +1,5 @@
 """
-rag_status.py — Read-only corpus / voice status for admin and health gates.
+rag_status.py  Read-only corpus / voice status for admin and health gates.
 """
 
 from __future__ import annotations

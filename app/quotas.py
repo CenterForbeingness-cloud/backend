@@ -1,5 +1,5 @@
 """
-quotas.py — Fair-use quota enforcement and message counting.
+quotas.py  Fair-use quota enforcement and message counting.
 
 Tracks messages per user per period (24 hours by default).
 All queries use parameterized statements to prevent SQL injection.
@@ -17,10 +17,10 @@ _schema_bootstrapped = False
 def _ensure_quotas_schema() -> bool:
     """Create quotas tables if missing (idempotent). Returns True on success."""
     global _schema_bootstrapped
-    
+
     if _schema_bootstrapped:
         return True
-    
+
     try:
         with _get_db_connection() as conn, conn.cursor() as cur:
             # Create user_message_counts table if missing
@@ -33,13 +33,13 @@ def _ensure_quotas_schema() -> bool:
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            
+
             # Create index for faster lookups
             cur.execute("""
-                CREATE INDEX IF NOT EXISTS idx_user_message_counts_period 
+                CREATE INDEX IF NOT EXISTS idx_user_message_counts_period
                 ON public.user_message_counts(user_id, period_start)
             """)
-            
+
             _schema_bootstrapped = True
             return True
     except Exception as exc:
@@ -57,12 +57,12 @@ def _get_db_connection():
 def get_message_count(user_id: str) -> int:
     """
     Get the current message count for a user in the active period.
-    
+
     If the period has expired, count is reset to 0.
-    
+
     Args:
         user_id: Supabase auth user ID (UUID string)
-    
+
     Returns:
         Number of messages in current period (>= 0)
     """
@@ -78,16 +78,16 @@ def get_message_count(user_id: str) -> int:
                 (user_id,),
             )
             row = cur.fetchone()
-            
+
             if row is None:
                 return 0
-            
+
             message_count, period_start = row
-            
+
             # Check if period has expired
             now = datetime.now(timezone.utc)
             period_expired = (now - period_start) > timedelta(hours=QUOTA_RESET_PERIOD_HOURS)
-            
+
             if period_expired:
                 # Reset and return 0
                 cur.execute(
@@ -101,7 +101,7 @@ def get_message_count(user_id: str) -> int:
                     (now, now, user_id),
                 )
                 return 0
-            
+
             return message_count
     except Exception as exc:
         logger.exception("get_message_count failed for user=%s: %s", user_id, exc)
@@ -111,11 +111,11 @@ def get_message_count(user_id: str) -> int:
 def check_quota(user_id: str, limit: int = FAIR_USE_LIMIT) -> bool:
     """
     Check if user is under their message quota for the current period.
-    
+
     Args:
         user_id: Supabase auth user ID (UUID string)
         limit: Message limit (default: FAIR_USE_LIMIT from config)
-    
+
     Returns:
         True if under limit, False if over limit or error
     """
@@ -131,12 +131,12 @@ def check_quota(user_id: str, limit: int = FAIR_USE_LIMIT) -> bool:
 def increment_message_count(user_id: str) -> bool:
     """
     Increment the message counter for a user.
-    
+
     Creates the row if it doesn't exist (idempotent insert-or-update).
-    
+
     Args:
         user_id: Supabase auth user ID (UUID string)
-    
+
     Returns:
         True if incremented successfully, False on error
     """
@@ -164,11 +164,11 @@ def increment_message_count(user_id: str) -> bool:
 def get_usage_info(user_id: str, limit: int = FAIR_USE_LIMIT) -> dict:
     """
     Get full usage info for a user: current count, limit, reset time.
-    
+
     Args:
         user_id: Supabase auth user ID (UUID string)
         limit: Message limit (default: FAIR_USE_LIMIT from config)
-    
+
     Returns:
         Dict with keys: messages_today, limit, reset_at (ISO datetime string)
     """
@@ -184,9 +184,9 @@ def get_usage_info(user_id: str, limit: int = FAIR_USE_LIMIT) -> dict:
                 (user_id,),
             )
             row = cur.fetchone()
-            
+
             now = datetime.now(timezone.utc)
-            
+
             if row is None:
                 reset_at = now + timedelta(hours=QUOTA_RESET_PERIOD_HOURS)
                 return {
@@ -194,12 +194,12 @@ def get_usage_info(user_id: str, limit: int = FAIR_USE_LIMIT) -> dict:
                     "limit": limit,
                     "reset_at": reset_at.isoformat(),
                 }
-            
+
             message_count, period_start = row
-            
+
             # Check if period has expired
             period_expired = (now - period_start) > timedelta(hours=QUOTA_RESET_PERIOD_HOURS)
-            
+
             if period_expired:
                 # Period has expired, reset
                 reset_at = now + timedelta(hours=QUOTA_RESET_PERIOD_HOURS)
@@ -208,7 +208,7 @@ def get_usage_info(user_id: str, limit: int = FAIR_USE_LIMIT) -> dict:
                     "limit": limit,
                     "reset_at": reset_at.isoformat(),
                 }
-            
+
             # Period is still active
             reset_at = period_start + timedelta(hours=QUOTA_RESET_PERIOD_HOURS)
             return {

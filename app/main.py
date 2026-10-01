@@ -87,6 +87,7 @@ from app.models import (
     CourseProgressResponse,
     CreateSessionRequest,
     BundlePurchaseEligibility,
+    AccessResponse,
     EntitlementResponse,
     LessonItem,
     MediaCatalogItem,
@@ -122,6 +123,12 @@ from app.entitlements import (
     resolve_chat_plan,
 )
 from app.quotas import get_usage_info
+from app.user_access import (
+    access_to_response_dict,
+    get_user_access,
+    require_chat_access,
+    start_trial,
+)
 from app.user_profile import (
     BenOnboardingValidationError,
     complete_ben_onboarding,
@@ -300,6 +307,10 @@ def _profile_response(user_id: str) -> UserProfileResponse:
         created_at=profile.created_at,
         updated_at=profile.updated_at,
     )
+
+
+def _access_response(user_id: str) -> AccessResponse:
+    return AccessResponse(**access_to_response_dict(get_user_access(user_id)))
 
 
 def _as_url(value: Optional[str], fallback: str) -> str:
@@ -527,7 +538,7 @@ def health() -> dict:
 
 @app.get("/health/launch-gates")
 def health_launch_gates(strict_live: bool = False) -> dict:
-    """Track A readiness — env flags only (no secret values). ?strict_live=true requires sk_live_."""
+    """Track A readiness  env flags only (no secret values). ?strict_live=true requires sk_live_."""
     from app.launch_gates import evaluate_launch_gates
 
     return evaluate_launch_gates(strict_live=strict_live)
@@ -535,7 +546,7 @@ def health_launch_gates(strict_live: bool = False) -> dict:
 
 @app.get("/health/voice-gates")
 def health_voice_gates(course_slug: Optional[str] = None) -> dict:
-    """Track C readiness — voice/RAG env + optional corpus hints (no secret values)."""
+    """Track C readiness  voice/RAG env + optional corpus hints (no secret values)."""
     from app.voice_gates import evaluate_voice_gates
 
     return evaluate_voice_gates(course_slug=course_slug)
@@ -662,7 +673,7 @@ def chat_stream(
             req, user_id, chat_store, default_provider=DEFAULT_PROVIDER
         )
         # Scripted path: one script reply. LLM path: stream only (do not call
-        # produce_reply first — that would generate a full reply then discard it).
+        # produce_reply first  that would generate a full reply then discard it).
         scripted = try_scripted_reply(ctx)
         if scripted is not None:
             result = finalize_chat_turn(
@@ -802,6 +813,8 @@ def mint_chat_token(
     user_id = _current_user_id(_user)
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
+
+    require_chat_access(user_id)
 
     plan = resolve_chat_plan(user_id)
     token, expires_in = create_chat_token(user_id=user_id, plan=plan)
@@ -1458,6 +1471,37 @@ def get_profile(_user: Optional[dict] = Depends(get_current_user)) -> UserProfil
     return _profile_response(user_id)
 
 
+@app.get("/access", response_model=AccessResponse)
+def get_access(_user: Optional[dict] = Depends(get_current_user)) -> AccessResponse:
+    """Return trial and subscription access for the authenticated user."""
+    user_id = _current_user_id(_user)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return _access_response(user_id)
+
+
+@app.post("/access/trial/start", response_model=AccessResponse)
+def start_access_trial(
+    _user: Optional[dict] = Depends(get_current_user),
+) -> AccessResponse:
+    """
+    Start a fourteen day trial if one has not started yet.
+
+    Idempotent. Does not gate chat yet; that is a later slice.
+    """
+    user_id = _current_user_id(_user)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        access = start_trial(user_id)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Access storage unavailable. Run sql/supabase_user_access.sql.",
+        ) from exc
+    return AccessResponse(**access_to_response_dict(access))
+
+
 @app.patch("/profile", response_model=UserProfileResponse)
 def update_profile(
     body: UserProfileUpdateRequest,
@@ -1539,7 +1583,7 @@ def get_usage(_user: Optional[dict] = Depends(get_current_user)) -> UsageRespons
 def admin_login_endpoint(request: Request, req: AdminLoginRequest) -> dict:
     """
     Admin login endpoint. Returns session_token for 2FA verification.
-    
+
     Next step: POST /admin/auth/verify-totp with email + totp_code.
     """
     session_token, error = admin_login(req.email, req.password)
@@ -1559,7 +1603,7 @@ def admin_login_endpoint(request: Request, req: AdminLoginRequest) -> dict:
 def admin_verify_totp_endpoint(request: Request, req: AdminTOTPVerifyRequest) -> AdminTokenResponse:
     """
     Verify TOTP code and return admin JWT token.
-    
+
     Admin can then use admin_token for admin-only endpoints.
     """
     admin_token, error = verify_admin_totp(req.email, req.totp_code)

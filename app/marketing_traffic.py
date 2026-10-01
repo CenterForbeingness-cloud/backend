@@ -1,5 +1,5 @@
 """
-marketing_traffic.py — Phase 2 page-view beacon ingest and daily rollups.
+marketing_traffic.py  Phase 2 page-view beacon ingest and daily rollups.
 """
 
 from __future__ import annotations

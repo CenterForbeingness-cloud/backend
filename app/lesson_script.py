@@ -1,7 +1,7 @@
 """
 Parse daily schedule copy into ordered beats and advance deterministically.
 
-Daily lessons do not rely on the LLM to track steps — that caused generic "hello"
+Daily lessons do not rely on the LLM to track steps  that caused generic "hello"
 replies and rushing through the script.
 """
 
@@ -80,14 +80,14 @@ def coach_reply(beats: List[str], beat_index: int, user_message: str) -> Tuple[s
         # First message without hello still starts check-in
         return beats[0], 1
 
-    # Awaiting check-in answer (one short phrase) — any reply advances to settle/breaths
+    # Awaiting check-in answer (one short phrase)  any reply advances to settle/breaths
     if beat_index == 1:
         if is_greeting(msg):
             return beats[0], 1
         return beats[1], 2
 
     # Mid-lesson: only explicit advance triggers move forward (no rushing on "one"/"two" alone
-    # unless they match ADVANCE_RE — user must say ready/next between beats)
+    # unless they match ADVANCE_RE  user must say ready/next between beats)
     if ADVANCE_RE.match(lower):
         reply = beats[beat_index]
         return reply, beat_index + 1
@@ -98,7 +98,7 @@ def coach_reply(beats: List[str], beat_index: int, user_message: str) -> Tuple[s
             beat_index,
         )
 
-    # Off-topic or chatter — do not advance
+    # Off-topic or chatter  do not advance
     return (
         "Say **ready** when you want the next part of today's practice.",
         beat_index,

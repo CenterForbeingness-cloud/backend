@@ -255,6 +255,22 @@ class UserProfileUpdateRequest(BaseModel):
     ben_onboarding: Optional[BenOnboardingPatch] = None
 
 
+class AccessResponse(BaseModel):
+    """Trial and subscription access. Chat gate enforcement comes in a later slice."""
+
+    user_id: str
+    trial_started_at: Optional[datetime] = None
+    trial_ends_at: Optional[datetime] = None
+    trial_started: bool = False
+    trial_active: bool = False
+    subscription_active: bool = False
+    subscription_updated_at: Optional[datetime] = None
+    chat_allowed: bool = False
+    meditate_in_5_free: bool = True
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
 class ChatTokenResponse(BaseModel):
     token: str
     token_type: Literal["bearer"] = "bearer"

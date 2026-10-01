@@ -196,7 +196,7 @@ def generate_reply_stream(
         except Exception as exc:
             _raise_unavailable(f"OpenAI stream failed: {exc}", cause=exc)
 
-    # Claude: no streaming in this path — single completion
+    # Claude: no streaming in this path  single completion
     text = generate_reply(
         latest_message,
         history,

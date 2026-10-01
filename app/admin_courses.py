@@ -1,5 +1,5 @@
 """
-admin_courses.py — Admin course CMS (catalog, schedule, weeks, product).
+admin_courses.py  Admin course CMS (catalog, schedule, weeks, product).
 """
 
 from __future__ import annotations

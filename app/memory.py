@@ -1,5 +1,5 @@
 """
-Phase 2 memory — facts, goals, and timeline events for /chat prompt injection.
+Phase 2 memory  facts, goals, and timeline events for /chat prompt injection.
 
 Full LLM extraction is post-launch; this module stores and loads structured memory.
 """
@@ -161,7 +161,7 @@ def format_memory_system_block(user_id: str) -> Optional[str]:
             for row in cur.fetchall():
                 if row and row[0]:
                     progress = row[2] if row[2] is not None else 0
-                    goals.append(f"{row[0]} ({progress}% — {row[1]})")
+                    goals.append(f"{row[0]} ({progress}%  {row[1]})")
 
             cur.execute(
                 """
@@ -180,7 +180,7 @@ def format_memory_system_block(user_id: str) -> Optional[str]:
     if not facts and not goals and not events:
         return None
 
-    sections: list[str] = ["[USER MEMORY — structured, not chat history]"]
+    sections: list[str] = ["[USER MEMORY  structured, not chat history]"]
     if facts:
         sections.append("Known facts:\n- " + "\n- ".join(facts))
     if goals:

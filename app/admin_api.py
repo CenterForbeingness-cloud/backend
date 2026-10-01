@@ -1,5 +1,5 @@
 """
-admin_api.py — Phase 5 admin routes (minimal v1).
+admin_api.py  Phase 5 admin routes (minimal v1).
 
 Protected endpoints require Authorization: Bearer <admin_token> from
 POST /admin/auth/verify-totp. See documentation/Admin/ADMIN_V1_SPEC.md.
@@ -127,7 +127,7 @@ _AUDIT_FILTER_ACTIONS = frozenset({
 def get_current_admin(
     credentials: HTTPAuthorizationCredentials = Security(_admin_bearer),
 ) -> dict:
-    """A1: FastAPI dependency — valid admin JWT required."""
+    """A1: FastAPI dependency  valid admin JWT required."""
     payload = verify_admin_token(credentials.credentials)
     if not payload:
         raise HTTPException(
@@ -608,7 +608,7 @@ def list_admin_audit_log(
 
 @router.get("/health")
 def admin_health() -> dict:
-    """Ops probe — no auth, exempt from ADMIN_ALLOWED_IPS."""
+    """Ops probe  no auth, exempt from ADMIN_ALLOWED_IPS."""
     return {"ok": True, "service": "admin"}
 
 
@@ -651,7 +651,7 @@ def admin_invite_staff(
     body: AdminInviteStaffRequest,
     admin: dict = Depends(get_current_admin),
 ) -> AdminInviteStaffResponse:
-    """Invite admin by email — they set password + authenticator via link (owner only)."""
+    """Invite admin by email  they set password + authenticator via link (owner only)."""
     _require_owner_role(admin)
 
     email = body.email.strip().lower()
@@ -1180,7 +1180,7 @@ def admin_waitlist_stats_endpoint(
     if not waitlist_table_available():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Waitlist table not available — run backend/sql/supabase_waitlist_signups.sql",
+            detail="Waitlist table not available  run backend/sql/supabase_waitlist_signups.sql",
         )
     try:
         return get_waitlist_stats()
@@ -1266,7 +1266,7 @@ def admin_waitlist_traffic_endpoint(
     if not marketing_traffic_available():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Marketing traffic tables not available — run backend/sql/supabase_marketing_traffic.sql",
+            detail="Marketing traffic tables not available  run backend/sql/supabase_marketing_traffic.sql",
         )
     try:
         return get_waitlist_traffic(days=days, page_path=page_path)

@@ -1,5 +1,5 @@
 """
-admin_waitlist.py — Website waitlist read API for admin (Phase 1 integration).
+admin_waitlist.py  Website waitlist read API for admin (Phase 1 integration).
 
 Source of truth: public.waitlist_signups (written by Sentaint Web). Same Supabase DB as backend.
 """

@@ -1,4 +1,4 @@
--- Drop and rename catalog plan — slice 3 (database)
+-- Drop and rename catalog plan  slice 3 (database)
 -- Date: 30 September 2026
 --
 -- Purpose:

@@ -1,5 +1,5 @@
 """
-auth_email_hook.py — Supabase Auth Send Email Hook → Resend API.
+auth_email_hook.py  Supabase Auth Send Email Hook → Resend API.
 
 Configure in Supabase Dashboard:
   Authentication → Hooks → Send Email Hook

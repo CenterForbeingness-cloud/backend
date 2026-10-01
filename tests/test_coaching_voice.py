@@ -70,7 +70,7 @@ def test_assemble_includes_companion_session_greeting_rules():
 
 def test_assemble_includes_stay_on_path_off_topic_rules():
     prompt = assemble_companion_system_prompt(COMPLETED)
-    assert "Off topic and hobbies (absolute — zero chase)" in prompt
+    assert "Off topic and hobbies (absolute  zero chase)" in prompt
     assert "at most one short acknowledge clause" in prompt
     assert "Never ask any question about the off topic subject" in prompt
     assert "What are you building?" in prompt

@@ -1,5 +1,5 @@
 """
-courses.py — Course catalog service.
+courses.py  Course catalog service.
 
 Primary source: Supabase course tables when SUPABASE_DB_URL is configured.
 Fallback: rag/raw/courses/ directory structure for local development.
@@ -257,7 +257,7 @@ def get_course_detail(course_slug: str) -> Optional[dict]:
             detail = _course_detail_from_db(course_slug)
             if detail is not None:
                 return detail
-            # In production, missing DB row means not found — do not invent from disk.
+            # In production, missing DB row means not found  do not invent from disk.
             if not _allow_filesystem_catalog():
                 return None
         except Exception as exc:

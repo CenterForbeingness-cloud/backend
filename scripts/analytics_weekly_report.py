@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Gate 4 ops report — funnel counts, voice engagement, purchases.
+Gate 4 ops report  funnel counts, voice engagement, purchases.
 
 Usage (from backend/, venv active):
   python scripts/analytics_weekly_report.py
@@ -176,7 +176,7 @@ def run_report(days: int) -> dict:
 
 def _print_report(data: dict) -> None:
     days = data["period_days"]
-    print(f"Sentient analytics report — last {days} day(s)")
+    print(f"Sentient analytics report  last {days} day(s)")
     print(f"Since: {data['since']}\n")
 
     print("Funnel (unique users with event):")

@@ -1,5 +1,5 @@
 """
-entitlements.py — Course ownership and entitlement management.
+entitlements.py  Course ownership and entitlement management.
 
 Queries user_entitlements table to check course access and grant/revoke permissions.
 All queries use parameterized statements to prevent SQL injection.
@@ -10,10 +10,7 @@ from typing import Optional
 
 from app.config import SUPABASE_DB_URL, logger
 
-# Product SKUs (Stripe) that are not daily-schedule courses.
 PRODUCT_ONLY_SLUGS: frozenset[str] = frozenset({"starter-bundle"})
-
-# Retired from new sale (locked product decisions). Keep entitlement grants for existing owners.
 RETIRED_FROM_SALE_COURSE_SLUGS: frozenset[str] = frozenset(
     {
         "week-zero-reset",
@@ -23,7 +20,6 @@ RETIRED_FROM_SALE_COURSE_SLUGS: frozenset[str] = frozenset(
     }
 )
 
-# Courses unlocked when a bundle SKU is purchased (also lazy-synced on GET /entitlements).
 BUNDLE_INCLUDED_COURSES: dict[str, tuple[str, ...]] = {
     "starter-bundle": (
         "mindful-foundations",
@@ -224,8 +220,6 @@ def _ensure_entitlements_schema() -> None:
             )
             """
         )
-
-        # Compatibility columns for pre-existing schemas
         cur.execute("ALTER TABLE public.user_entitlements ADD COLUMN IF NOT EXISTS granted_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())")
         cur.execute("ALTER TABLE public.user_entitlements ADD COLUMN IF NOT EXISTS granted_by TEXT")
         cur.execute("ALTER TABLE public.user_entitlements ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ")
@@ -295,21 +289,21 @@ def _ensure_entitlements_schema() -> None:
 def check_entitlement(user_id: str, course_slug: str) -> bool:
     """
     Check if user owns (has an active, non-revoked entitlement for) a course.
-    
+
     Returns True if:
     - An entitlement row exists for (user_id, course_slug)
     - revoked_at IS NULL
     - expires_at IS NULL OR expires_at > now
-    
+
     Returns False otherwise.
-    
+
     Args:
         user_id: Supabase auth user ID (UUID string)
         course_slug: Course identifier (alphanumeric + hyphens)
-    
+
     Returns:
         True if user owns course, False otherwise
-    
+
     Raises:
         RuntimeError: If database is not configured
     """
@@ -358,10 +352,10 @@ def check_entitlement(user_id: str, course_slug: str) -> bool:
 def get_user_entitlements(user_id: str) -> list[str]:
     """
     Return list of course slugs the user owns (active entitlements).
-    
+
     Args:
         user_id: Supabase auth user ID (UUID string)
-    
+
     Returns:
         List of course_slug strings
     """
@@ -404,23 +398,22 @@ def grant_entitlement(
 ) -> bool:
     """
     Grant a course entitlement to a user.
-    
+
     If an active entitlement already exists, this is a no-op (idempotent).
     If a revoked entitlement exists, create a new one.
-    
+
     Args:
         user_id: Supabase auth user ID (UUID string)
         course_slug: Course identifier
         granted_by: One of 'stripe', 'apple', 'google', 'admin'
         expires_at: Optional expiry datetime (UTC). None means no expiry.
-    
+
     Returns:
         True if granted, False on error
     """
     _ensure_entitlements_schema()
     try:
         with _get_db_connection() as conn, conn.cursor() as cur:
-            # Check if active entitlement already exists
             cur.execute(
                 """
                 SELECT id
@@ -435,7 +428,7 @@ def grant_entitlement(
             if cur.fetchone() is not None:
                 logger.info("Entitlement already exists for user=%s course=%s, skipping", user_id, course_slug)
                 return True
-            
+
             # Insert new entitlement
             cur.execute(
                 """
@@ -454,12 +447,12 @@ def grant_entitlement(
 def revoke_entitlement(user_id: str, course_slug: str, reason: str = "admin_revoke") -> bool:
     """
     Revoke a user's course entitlement.
-    
+
     Args:
         user_id: Supabase auth user ID (UUID string)
         course_slug: Course identifier
         reason: Revocation reason (e.g. 'refund', 'expiry', 'admin_revoke')
-    
+
     Returns:
         True if revoked, False on error
     """
@@ -627,9 +620,9 @@ def record_purchase_event(
     Record a purchase event for audit/idempotency.
 
     Returns:
-        "new" — first time this Stripe event id was seen
-        "duplicate" — event already recorded (skip grant side effects)
-        "error" — database failure
+        "new" first time this Stripe event id was seen
+        "duplicate" event already recorded (skip grant side effects)
+        "error" database failure
     """
     _ensure_entitlements_schema()
     try:

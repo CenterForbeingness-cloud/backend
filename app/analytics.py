@@ -1,5 +1,5 @@
 """
-analytics.py — MVP Launch event tracking (Postgres analytics_events).
+analytics.py  MVP Launch event tracking (Postgres analytics_events).
 """
 
 from __future__ import annotations

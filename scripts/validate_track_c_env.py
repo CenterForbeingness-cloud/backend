@@ -38,7 +38,7 @@ def main() -> None:
     for row in checks:
         mark = "OK " if row["ok"] else "FAIL"
         req = "required" if row.get("required", True) else "optional"
-        print(f"  [{mark}] {row['gate_id']} {row['name']} ({req}) — {row['detail']}")
+        print(f"  [{mark}] {row['gate_id']} {row['name']} ({req})  {row['detail']}")
 
     corpus = result.get("corpus") or {}
     print(
@@ -52,7 +52,7 @@ def main() -> None:
     if result.get("ready"):
         print("READY: all required gates pass.")
         if not result.get("voice_enabled"):
-            print("Note: VOICE_ENABLED is false — voice endpoints return 503 until enabled.")
+            print("Note: VOICE_ENABLED is false  voice endpoints return 503 until enabled.")
         sys.exit(0)
 
     print("NOT READY. Fix on Railway (or backend/.env for local):")

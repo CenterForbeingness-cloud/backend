@@ -11,7 +11,7 @@ FastAPI backend for the AI chat companion, billing, course context (RAG), and se
 
 **Build order:** [`MVP_NORTH_STAR.md`](../documentation/ExecutiveSummary/MVP_NORTH_STAR.md) · [`documentation/ExecutiveSummary/MVP_LAUNCH_SCOPE.md`](../documentation/ExecutiveSummary/MVP_LAUNCH_SCOPE.md)
 
-**MVP Launch backend:** Track B `user_profile` + Track C **voice+RAG** (same `/chat` path) + Track D **analytics** — not admin UI.
+**MVP Launch backend:** Track B `user_profile` + Track C **voice+RAG** (same `/chat` path) + Track D **analytics**  not admin UI.
 
 **Launch gates:** [`SECURITY_AND_REMAINING_WORK.md`](../documentation/Security/SECURITY_AND_REMAINING_WORK.md) (Tracks A–D)
 
@@ -61,10 +61,10 @@ Companion-first product direction:
 - `POST /courses/{course_slug}/progress/advance`
 - `GET /entitlements`
 - `GET /usage`
-- `GET /profile` — thin companion memory (Phase 1)
-- `PATCH /profile` — update goals / focus
+- `GET /profile`  thin companion memory (Phase 1)
+- `PATCH /profile`  update goals / focus
 
-**Admin (internal ops)** — see `documentation/Admin/ADMIN_IMPLEMENTATION_STATUS.md` and `documentation/Admin/ADMIN_V1_SPEC.md`
+**Admin (internal ops)**  see `documentation/Admin/ADMIN_IMPLEMENTATION_STATUS.md` and `documentation/Admin/ADMIN_V1_SPEC.md`
 
 - Auth: `POST /admin/auth/login`, `POST /admin/auth/verify-totp`
 - Users: `GET /admin/users`, `GET /admin/users/{user_id}`, grant and revoke entitlements
@@ -230,7 +230,8 @@ SQL setup files:
 
 - `backend/sql/supabase_chat_rls.sql` for chat session/message schema and RLS
 - `backend/sql/supabase_entitlements_rls.sql` for **`course_purchases`**, **`user_entitlements`**, **`purchase_events`**, and RLS (run after local dev bootstrap or on fresh Supabase)
-- `backend/sql/supabase_courses_billing_rls.sql` for course catalog (`course_weeks`, `course_products`, etc.) — optional; filesystem fallback works without it
+- `backend/sql/supabase_user_access.sql` for trial and subscription access (`user_access`). Backend also bootstraps this table when `SUPABASE_DB_URL` is set.
+- `backend/sql/supabase_courses_billing_rls.sql` for course catalog (`course_weeks`, `course_products`, etc.)  optional; filesystem fallback works without it
 - `backend/sql/supabase_course_daily_schedule.sql` for day-by-day course schedule rows (imported from external text files)
 - `backend/sql/supabase_user_course_progress.sql` for per-user current day in a schedule course
 
@@ -269,15 +270,15 @@ Migration file: `backend/sql/supabase_course_daily_schedule.sql` (safe to run st
 
 `current_day_number` is the **schedule index** (`Day 1`, `Day 2`, … in the imported file), not “today’s date.” Users stay on day 2 until `POST /courses/{slug}/progress/advance` (or an explicit `day_number` on `/chat`). Calendar-based auto-advance is not implemented; see `schedules/README.md`.
 
-### Chat behavior (guide mode — default)
+### Chat behavior (guide mode  default)
 
 Schedule day themes inject **only** when the client sends `daily_practice: true` (Daily practice UI) or an explicit `day_number` (testing). Lesson chat (`week_number` set) never loads the daily schedule.
 
 | Mode | `daily_practice` | `week_number` | Schedule | RAG |
 |------|------------------|---------------|----------|-----|
-| Companion home | — | — | no | no |
-| Daily practice | `true` | — | yes (themes) | yes (guide mode) |
-| Lesson | — | set | no | yes (week scope) |
+| Companion home |  |  | no | no |
+| Daily practice | `true` |  | yes (themes) | yes (guide mode) |
+| Lesson |  | set | no | yes (week scope) |
 
 Env: `SCHEDULE_MODE=guide` (default). See `documentation/ExecutiveSummary/GUIDE_MODE_DEPLOY.md`.
 
@@ -300,9 +301,9 @@ Guide mode uses a **theme block** in the system prompt (coach in your own words,
 
 ### Code
 
-- `app/daily_schedule.py` — parse, `replace_schedule`, `get_schedule_day`
-- `app/course_progress.py` — `resolve_schedule_day_number`, `get_progress`, `advance_day`
-- `scripts/import_daily_schedule.py` — CLI import (replaces all days for a slug)
+- `app/daily_schedule.py`  parse, `replace_schedule`, `get_schedule_day`
+- `app/course_progress.py`  `resolve_schedule_day_number`, `get_progress`, `advance_day`
+- `scripts/import_daily_schedule.py`  CLI import (replaces all days for a slug)
 
 Stripe env variables expected by backend config:
 
@@ -320,17 +321,17 @@ Stripe CLI and webhook testing guide:
 
 ## Next backend work (priority order)
 
-### Phase 1 — highest ROI (moat)
+### Phase 1  highest ROI (moat)
 
-1. **`user_profile`** — SQL migration + RLS + `GET`/`PATCH /profile`
-2. **Prompt injection** — load profile in `chat_service.py`; add `USER PROFILE` block to system prompt (`primary_goal`, `current_focus`, `biggest_obstacle`, `motivation_type`)
-3. **Onboarding or first-chat capture** — write profile row (manual fields OK; no extraction engine required for v1)
+1. **`user_profile`**  SQL migration + RLS + `GET`/`PATCH /profile`
+2. **Prompt injection**  load profile in `chat_service.py`; add `USER PROFILE` block to system prompt (`primary_goal`, `current_focus`, `biggest_obstacle`, `motivation_type`)
+3. **Onboarding or first-chat capture**  write profile row (manual fields OK; no extraction engine required for v1)
 
-### Phase 1 — launch hardening (parallel)
+### Phase 1  launch hardening (parallel)
 
 - Prod env: `AUTH_ENFORCED`, `CHAT_TOKEN_ENFORCED`, `RATE_LIMIT_ENABLED`, live Stripe webhook, CORS, Supabase redirects (`SECURITY_AND_REMAINING_WORK.md`)
 
-### Phase 2 — memory+
+### Phase 2  memory+
 
 - `user_facts`, `user_goals`, `memory_events`, extraction pipeline (`MVP_NORTH_STAR.md`)
 
@@ -344,6 +345,5 @@ Stripe CLI and webhook testing guide:
 1. Validate JWT → `user_id`
 2. Fair-use quota check
 3. Entitlement check when `course_slug` is set
-4. Build context (schedule day, RAG, **short history** — not structured memory yet)
+4. Build context (schedule day, RAG, **short history**  not structured memory yet)
 5. Generate reply
-

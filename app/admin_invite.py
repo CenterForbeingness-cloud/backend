@@ -1,5 +1,5 @@
 """
-admin_invite.py — Email invite + self-service password and TOTP enrollment.
+admin_invite.py  Email invite + self-service password and TOTP enrollment.
 """
 
 from __future__ import annotations

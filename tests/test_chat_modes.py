@@ -10,6 +10,12 @@ from app.rag import RetrievalHit, RetrievalResult
 from app.user_profile import UserProfile
 
 
+@pytest.fixture(autouse=True)
+def _allow_chat_access():
+    with patch("app.chat_service.require_chat_access"):
+        yield
+
+
 def _mock_store():
     store = MagicMock()
     store.get_history.return_value = []

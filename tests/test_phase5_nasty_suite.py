@@ -125,6 +125,8 @@ def test_user_without_entitlement_blocked_from_paid_course_chat() -> None:
     with patch("app.config.CHAT_TOKEN_ENFORCED", True), patch(
         "app.config.CHAT_TOKEN_SECRET", _CHAT_SECRET
     ), patch(
+        "app.chat_service.require_chat_access"
+    ), patch(
         "app.chat_service.check_quota", return_value=True
     ), patch(
         "app.chat_service.check_entitlement", return_value=False
@@ -162,6 +164,8 @@ def test_user_with_entitlement_allowed_for_paid_course_chat() -> None:
 
     with patch("app.config.CHAT_TOKEN_ENFORCED", True), patch(
         "app.config.CHAT_TOKEN_SECRET", _CHAT_SECRET
+    ), patch(
+        "app.chat_service.require_chat_access"
     ), patch(
         "app.chat_service.check_quota", return_value=True
     ), patch(
@@ -553,6 +557,8 @@ def test_chat_ai_failure_returns_sensible_503_not_fake_success() -> None:
     with patch("app.config.CHAT_TOKEN_ENFORCED", True), patch(
         "app.config.CHAT_TOKEN_SECRET", _CHAT_SECRET
     ), patch(
+        "app.chat_service.require_chat_access"
+    ), patch(
         "app.chat_service.check_quota", return_value=True
     ), patch(
         "app.main.chat_store", store
@@ -589,6 +595,8 @@ def test_chat_stream_ai_failure_emits_sensible_error_event() -> None:
     with patch("app.config.CHAT_TOKEN_ENFORCED", True), patch(
         "app.config.CHAT_TOKEN_SECRET", _CHAT_SECRET
     ), patch(
+        "app.chat_service.require_chat_access"
+    ), patch(
         "app.chat_service.check_quota", return_value=True
     ), patch(
         "app.main.try_scripted_reply", return_value=None
@@ -624,6 +632,8 @@ def test_chat_stream_performs_one_generation_for_normal_turn() -> None:
 
     with patch("app.config.CHAT_TOKEN_ENFORCED", True), patch(
         "app.config.CHAT_TOKEN_SECRET", _CHAT_SECRET
+    ), patch(
+        "app.chat_service.require_chat_access"
     ), patch(
         "app.chat_service.check_quota", return_value=True
     ), patch(
@@ -703,6 +713,8 @@ def test_daily_practice_without_entitlement_is_blocked() -> None:
     with patch("app.config.CHAT_TOKEN_ENFORCED", True), patch(
         "app.config.CHAT_TOKEN_SECRET", _CHAT_SECRET
     ), patch(
+        "app.chat_service.require_chat_access"
+    ), patch(
         "app.chat_service.check_quota", return_value=True
     ), patch(
         "app.chat_service.check_entitlement", return_value=False
@@ -744,7 +756,9 @@ def test_daily_practice_guide_path_loads_schedule_when_entitled() -> None:
         "content": "themes for the day",
     }
 
-    with patch("app.chat_service.check_quota", return_value=True), patch(
+    with patch("app.chat_service.require_chat_access"), patch(
+        "app.chat_service.check_quota", return_value=True
+    ), patch(
         "app.chat_service.check_entitlement", return_value=True
     ) as mock_entitlement, patch(
         "app.chat_service.resolve_schedule_day_number", return_value=3

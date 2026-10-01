@@ -1,4 +1,4 @@
--- Theme-based daily schedule for week-zero-reset (guide mode — not verbatim script)
+-- Theme-based daily schedule for week-zero-reset (guide mode  not verbatim script)
 -- Run AFTER: supabase_course_daily_schedule.sql + seed_courses_example.sql
 
 begin;
@@ -12,7 +12,7 @@ values
     'week-zero-reset',
     1,
     'Witness and arrival',
-    E'Day 1 themes — guide in your own words:\n'
+    E'Day 1 themes  guide in your own words:\n'
     || E'- Check in: how are they arriving right now?\n'
     || E'- Introduce the witness: watching the breath, noticing awareness of watching\n'
     || E'- Keep it about 10 minutes unless they want shorter\n'

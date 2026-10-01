@@ -222,17 +222,17 @@ def format_day_context(day: dict) -> str:
     header = f"Day {day['day_number']}"
     if day.get("day_title"):
         header = f"{header}: {day['day_title']}"
-    return f"[Course schedule — {header}]\n{day['content']}"
+    return f"[Course schedule  {header}]\n{day['content']}"
 
 
 _SCHEDULE_COACHING_RULES = """\
-[Daily lesson — STRICT SCRIPT MODE]
+[Daily lesson  STRICT SCRIPT MODE]
 The app already showed today's welcome. Coach ONLY through the numbered lesson script below.
 
 Non-negotiable rules:
 1. Deliver ONE script step per message (split a step across messages only if the step itself has multiple lines, e.g. three breaths).
 2. Keep replies short: about two to four sentences unless the step gives longer guided text to read aloud.
-3. Greetings (hello, hi, hey, good morning, etc.) are NOT small talk — immediately deliver Step 1. Never reply with "Hello! How can I help?" or open chat.
+3. Greetings (hello, hi, hey, good morning, etc.) are NOT small talk  immediately deliver Step 1. Never reply with "Hello! How can I help?" or open chat.
 4. Affirmatives (ready, yes, ok, okay, sure, begin, start, continue, next) mean: deliver the NEXT step you have not yet given in this conversation.
 5. Off-topic messages: one calm redirect sentence, then repeat the current step's instruction. Do not engage the tangent.
 6. Never invent steps, techniques, or timings not in the script. Never teach a different day's lesson.
@@ -251,18 +251,18 @@ def build_schedule_system_block(day: dict) -> str:
 
     return (
         f"{_SCHEDULE_COACHING_RULES}\n"
-        f"[TODAY'S LESSON — Day {day_number}: {title}]\n"
+        f"[TODAY'S LESSON  Day {day_number}: {title}]\n"
         f"(About {duration} minutes of guided practice.)\n\n"
         f"{content}"
     )
 
 
 _SCHEDULE_GUIDE_RULES = """\
-[Daily companion — today's focus]
+[Daily companion  today's focus]
 The admin notes below describe themes for this schedule day. They are guidance for you, not lines to read aloud.
 
 Rules:
-1. Coach in your own words — warm, concise, and responsive to what the user just said.
+1. Coach in your own words  warm, concise, and responsive to what the user just said.
 2. Use [Additional context] from the course (RAG) when it helps teach today's themes.
 3. Personalize with the user's profile (goals, habits, patterns) when available.
 4. Stay on today's themes; do not jump ahead to a later day.
@@ -281,7 +281,7 @@ def build_schedule_guide_block(day: dict) -> str:
 
     return (
         f"{_SCHEDULE_GUIDE_RULES}\n"
-        f"[TODAY'S FOCUS — Day {day_number}: {title}]\n"
+        f"[TODAY'S FOCUS  Day {day_number}: {title}]\n"
         f"(Roughly {duration} minutes if they want a full sit.)\n\n"
         f"{content}"
     )
@@ -302,7 +302,7 @@ def estimate_duration_minutes(content: str) -> int:
 
 def build_day_welcome(day: dict, *, guide_mode: bool = False) -> str:
     """
-    First assistant message before the user speaks — same shape every day.
+    First assistant message before the user speaks  same shape every day.
     """
     day_number = day["day_number"]
     day_title = day.get("day_title")
@@ -318,7 +318,7 @@ def build_day_welcome(day: dict, *, guide_mode: bool = False) -> str:
         return (
             f"Welcome to {headline}.\n\n"
             f"Today's focus is about {duration_label}. "
-            f"Tell me how you're arriving, or what you'd like from this session — "
+            f"Tell me how you're arriving, or what you'd like from this session  "
             f"I'll guide you from there."
         )
 
@@ -326,5 +326,5 @@ def build_day_welcome(day: dict, *, guide_mode: bool = False) -> str:
         f"Welcome to {headline}.\n\n"
         f"Today's practice is about {duration_label}. "
         f"We'll follow a fixed step-by-step script.\n\n"
-        f"Reply **ready** to begin, or say **hello** — we'll start at Step 1."
+        f"Reply **ready** to begin, or say **hello**  we'll start at Step 1."
     )

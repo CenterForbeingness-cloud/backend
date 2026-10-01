@@ -1,5 +1,5 @@
 """
-email_service.py — All transactional email via the Resend HTTP API.
+email_service.py  All transactional email via the Resend HTTP API.
 
 Used for:
   - Admin staff invites and admin password reset
@@ -109,14 +109,14 @@ Open this link to set your password and connect your authenticator app (Google A
 
 This link expires in 72 hours. If you did not expect this email, ignore it.
 
-— Sentient Ops
+ Sentient Ops
 """
     html = f"""<p>Hello,</p>
 <p>You've been invited as a Sentient admin (<strong>{role}</strong> role).</p>
 <p><a href="{invite_url}">Set up your admin account and 2FA</a></p>
 <p>Or copy this URL:<br/><code>{invite_url}</code></p>
 <p>This link expires in 72 hours.</p>
-<p>— Sentient Ops</p>"""
+<p> Sentient Ops</p>"""
 
     if not resend_configured():
         logger.warning(
@@ -155,7 +155,7 @@ Open this link to choose a new password (you will need your authenticator app):
 
 This link expires in 24 hours. If you did not request this, ignore this email.
 
-— Sentient Ops
+ Sentient Ops
 """
     html = f"""<p>Hello,</p>
 <p>We received a request to reset the password for your Sentient admin account.</p>
@@ -163,7 +163,7 @@ This link expires in 24 hours. If you did not request this, ignore this email.
 <p>Or copy this URL:<br/><code>{reset_url}</code></p>
 <p>You will need your existing authenticator app (6-digit code) to finish.</p>
 <p>This link expires in 24 hours.</p>
-<p>— Sentient Ops</p>"""
+<p> Sentient Ops</p>"""
 
     if not resend_configured():
         logger.warning(
@@ -226,7 +226,7 @@ def build_auth_action_email(
         cta = "Confirm email change"
         intro = "Confirm this address to finish updating your Sentient email."
     elif action == "reauthentication":
-        subject = "Confirm it's you — Sentient"
+        subject = "Confirm it's you  Sentient"
         cta = "Confirm"
         intro = "Confirm this action on your Sentient account."
     else:
@@ -243,7 +243,7 @@ def build_auth_action_email(
 {otp_line}
 If you did not request this, you can ignore this email.
 
-— Sentient
+ Sentient
 """
     html = f"""<p>Hello,</p>
 <p>{intro}</p>
@@ -251,7 +251,7 @@ If you did not request this, you can ignore this email.
 <p>Or copy this URL:<br/><code>{confirm_url}</code></p>
 {otp_html}
 <p>If you did not request this, you can ignore this email.</p>
-<p>— Sentient</p>"""
+<p> Sentient</p>"""
     return subject, text, html
 
 

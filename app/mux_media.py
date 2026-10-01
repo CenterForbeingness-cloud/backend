@@ -1,10 +1,3 @@
-"""
-mux_media.py — Mux Video playback for Foundations media.
-
-Playback IDs map to product content keys. The Flutter app never talks to Mux
-with API secrets; it asks this backend for an HLS URL.
-"""
-
 from __future__ import annotations
 
 from typing import Optional
@@ -59,7 +52,6 @@ def build_hls_url(playback_id: str, token: Optional[str] = None) -> str:
 
 
 def _sign_playback_jwt(playback_id: str, expires_in_seconds: int = 14400) -> str:
-    """Sign a Mux playback JWT. Requires MUX_SIGNING_KEY_ID and private key."""
     import time
 
     import jwt
@@ -90,12 +82,6 @@ def _sign_playback_jwt(playback_id: str, expires_in_seconds: int = 14400) -> str
 
 
 def resolve_playback(content_key: str) -> dict:
-    """
-    Resolve an HLS playback URL for a content key.
-
-    Public playback is the default until signing keys are configured and
-    MUX_SIGNED_PLAYBACK=true.
-    """
     key = (content_key or "").strip().lower()
     playback_id = get_playback_id(key)
     if not playback_id:
@@ -118,7 +104,6 @@ def resolve_playback(content_key: str) -> dict:
 
 
 def mux_assets_api_ready() -> dict:
-    """Light readiness probe using the official Mux Python SDK when configured."""
     if not mux_credentials_configured():
         return {"configured": False, "ok": False, "detail": "MUX_TOKEN_ID/SECRET missing"}
 
@@ -132,7 +117,7 @@ def mux_assets_api_ready() -> dict:
         assets_api = mux_python.AssetsApi(mux_python.ApiClient(configuration))
         assets_api.list_assets(limit=1)
         return {"configured": True, "ok": True, "detail": "Mux Assets API reachable"}
-    except Exception as exc:  # noqa: BLE001 — surface as readiness detail
+    except Exception as exc:  # noqa: BLE001  surface as readiness detail
         logger.warning("Mux Assets API probe failed: %s", exc)
         return {
             "configured": True,

@@ -131,7 +131,7 @@
 
     <div id="loginView">
       <h1>Sentient Admin</h1>
-      <p class="sub">Internal ops only — not linked from the app.</p>
+      <p class="sub">Internal ops only  not linked from the app.</p>
       <div id="loginMsg"></div>
       <div class="card">
         <label for="email">Email</label>
@@ -644,7 +644,7 @@
     });
 
     function renderUserRow(u) {
-      const owned = (u.owned_courses || []).map((c) => `<span class="pill">${c}</span>`).join(" ") || "—";
+      const owned = (u.owned_courses || []).map((c) => `<span class="pill">${c}</span>`).join(" ") || "";
       const actions = canMutate()
         ? (() => {
             const opts = courseOptionsHtml();
@@ -664,7 +664,7 @@
     }
 
     function fmtDt(v) {
-      if (!v) return "—";
+      if (!v) return "";
       try { return new Date(v).toLocaleString(); } catch (_) { return String(v); }
     }
 
@@ -678,7 +678,7 @@
         const active = (d.entitlements || []).filter((e) => !e.revoked_at);
         const entHtml = active.length
           ? active.map((e) => `<span class="pill">${e.course_slug}</span> <small>(${e.granted_by})</small>`).join("<br/>")
-          : "—";
+          : "";
         const purchHtml = (d.purchases || []).length
           ? `<table><tr><th>Course</th><th>When</th><th>Source</th></tr>
             ${d.purchases.map((p) => `<tr>
@@ -705,7 +705,7 @@
           <h2 style="margin:0 0 8px;font-size:1.05rem;">${d.email || userId}</h2>
           <div class="detail-grid">
             <div><h3>Profile</h3>
-              <p class="sub" style="margin:0;">${profile.display_name || "—"} · ${profile.primary_goal || "no goal"}</p>
+              <p class="sub" style="margin:0;">${profile.display_name || ""} · ${profile.primary_goal || "no goal"}</p>
             </div>
             <div><h3>Usage</h3>
               <p class="sub" style="margin:0;">${d.chat_plan} · ${d.usage.messages_today}/${d.usage.limit} msgs</p>
@@ -865,7 +865,7 @@
             <td><span class="pill ${c.is_published ? "live" : "draft"}">${c.is_published ? "live" : "draft"}</span></td>
             <td>${c.day_count ?? 0}</td>
             <td>${c.week_count ?? 0}</td>
-            <td><code>${esc(c.price_id || "—")}</code></td>
+            <td><code>${esc(c.price_id || "")}</code></td>
             <td><button type="button" class="secondary" onclick="openCourseEditor('${c.course_slug.replace(/'/g, "\\'")}')">Edit</button></td>
           </tr>`).join("")}
         </tbody></table>`;
@@ -979,7 +979,7 @@
 
         <div class="editor-section">
           <h3>Weeks &amp; lessons (storefront)</h3>
-          <p class="sub" style="margin-top:0;">JSON array — week_number, title, lessons[]. Replaces entire tree on save.</p>
+          <p class="sub" style="margin-top:0;">JSON array  week_number, title, lessons[]. Replaces entire tree on save.</p>
           <textarea id="edWeeksJson" class="code" ${edit ? "" : "disabled"}>${esc(weeksJson)}</textarea>
           ${edit ? `<button type="button" id="saveWeeksBtn">Save weeks</button>` : ""}
         </div>
@@ -1004,9 +1004,9 @@
           <p class="sub" style="margin-top:0;">
             Text: <strong>${rag.text_files ?? 0}</strong> file(s) on disk ·
             Audio: <strong>${rag.audio_files ?? 0}</strong> file(s) in <code>audio/</code><br/>
-            Last text manifest: ${esc(rag.last_text_manifest_at || "—")} ·
-            Last audio manifest: ${esc(rag.last_audio_manifest_at || "—")}<br/>
-            Chunks indexed: text ${rag.text_chunk_count ?? "—"} · audio ${rag.audio_chunk_count ?? "—"}
+            Last text manifest: ${esc(rag.last_text_manifest_at || "")} ·
+            Last audio manifest: ${esc(rag.last_audio_manifest_at || "")}<br/>
+            Chunks indexed: text ${rag.text_chunk_count ?? ""} · audio ${rag.audio_chunk_count ?? ""}
           </p>
           <p class="sub" style="margin-top:8px;">
             Ops: drop files under <code>rag/raw/courses/${esc(c.course_slug)}/</code> then run
@@ -1020,7 +1020,7 @@
           <p class="sub" style="margin-top:0;">
             ${voice.configured
               ? `Configured · provider <code>${esc(voice.provider || "elevenlabs")}</code> · id ${esc(voice.voice_id_hint || "")}`
-              : "Not configured — TTS falls back to <code>ELEVENLABS_VOICE_ID_DEFAULT</code> env."}
+              : "Not configured  TTS falls back to <code>ELEVENLABS_VOICE_ID_DEFAULT</code> env."}
           </p>
           <div class="row">
             <div><label>Provider</label><input id="edVoiceProvider" value="${esc(voice.provider || "elevenlabs")}" ${edit ? "" : "disabled"} /></div>
@@ -1238,7 +1238,7 @@
         if (data.email_sent) {
           reveal.innerHTML = `<strong>Invite emailed</strong> to ${data.email}. They will set up 2FA at the admin link.`;
         } else {
-          reveal.innerHTML = `<strong>SMTP not configured</strong> — share this link once (72h):<br/>
+          reveal.innerHTML = `<strong>SMTP not configured</strong>  share this link once (72h):<br/>
             <code style="word-break:break-all">${data.invite_link || ""}</code>`;
         }
         showMsg($("appMsg"), `Invite created for ${data.email}.`, true);
@@ -1362,7 +1362,7 @@
             statCard(tr.total_page_views ?? 0, "Page views"),
             statCard(tr.total_unique_sessions ?? 0, "Unique sessions"),
             statCard(tr.total_signups ?? 0, "Signups (period)"),
-            statCard(tr.period_conversion_pct != null ? tr.period_conversion_pct + "%" : "—", "Conversion"),
+            statCard(tr.period_conversion_pct != null ? tr.period_conversion_pct + "%" : "", "Conversion"),
           ].join("");
           const days = tr.days || [];
           trafficTable.innerHTML = days.length
@@ -1372,10 +1372,10 @@
                 <td>${d.page_views}</td>
                 <td>${d.unique_sessions}</td>
                 <td>${d.signups}</td>
-                <td>${d.conversion_pct != null ? d.conversion_pct + "%" : "—"}</td>
+                <td>${d.conversion_pct != null ? d.conversion_pct + "%" : ""}</td>
               </tr>`).join("")}
             </tbody></table>`
-            : "<p class=\"sub\">No traffic yet — enable the marketing site beacon.</p>";
+            : "<p class=\"sub\">No traffic yet  enable the marketing site beacon.</p>";
         } catch (te) {
           trafficTable.innerHTML = `<p class="sub">${esc(te.message)}</p>`;
         }
@@ -1395,7 +1395,7 @@
         </tr></thead><tbody>
           ${rows.map((s) => `<tr>
             <td>${esc(s.email)}</td>
-            <td><span class="pill">${esc(s.source || "—")}</span></td>
+            <td><span class="pill">${esc(s.source || "")}</span></td>
             <td><small>${fmtDt(s.created_at)}</small></td>
             <td><small>${s.launch_notified_at ? fmtDt(s.launch_notified_at) : "<span class=\"pill draft\">pending</span>"}</small></td>
           </tr>`).join("")}
@@ -1460,7 +1460,7 @@
               <td>${u.messages_today}/${u.limit} (${u.pct_used}%)</td>
             </tr>`).join("")}
           </tbody></table>`
-          : `<p class="sub">No users at ≥80% of ${d.fair_use_limit || "—"} msg limit in active period.</p>`;
+          : `<p class="sub">No users at ≥80% of ${d.fair_use_limit || ""} msg limit in active period.</p>`;
         const ev = d.event_counts || [];
         events.innerHTML = ev.length
           ? `<table><thead><tr><th>Event</th><th>Count</th></tr></thead><tbody>
@@ -1489,7 +1489,7 @@
           <table><thead><tr><th>Day</th><th>Title</th><th>Preview</th></tr></thead><tbody>
           ${d.days.map((day) => `<tr>
             <td>${day.day_number}</td>
-            <td>${day.day_title || "—"}</td>
+            <td>${day.day_title || ""}</td>
             <td><small>${day.content_preview}</small></td>
           </tr>`).join("")}
           </tbody></table>`;
