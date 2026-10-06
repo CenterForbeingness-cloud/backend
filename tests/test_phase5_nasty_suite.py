@@ -707,7 +707,6 @@ def test_production_phase4_storage_gates_reject_in_memory_store() -> None:
             assert_production_phase4_storage_gates(InMemoryChatStore(10))
 
 def test_daily_practice_without_entitlement_is_blocked() -> None:
-    """Phase 5 item 12: daily practice still requires course entitlement."""
     token = _make_chat_token(user_id="user-phase5-practice-blocked")
 
     with patch("app.config.CHAT_TOKEN_ENFORCED", True), patch(
