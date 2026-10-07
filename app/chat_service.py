@@ -19,6 +19,7 @@ from app.config import (
     SCHEDULE_HISTORY_MESSAGES,
     SCHEDULE_MODE,
     SCHEDULE_SCRIPT_ENGINE,
+    VOICE_MAX_REPLY_TOKENS,
     logger,
 )
 from app.course_progress import resolve_schedule_day_number, touch_course_activity
@@ -286,6 +287,9 @@ def produce_reply(
         profile_block = _load_companion_context_block(ctx.user_id)
 
     try:
+        voice_token_cap = (
+            VOICE_MAX_REPLY_TOKENS if getattr(ctx.req, "mode", None) == "voice" else None
+        )
         reply = generate_reply(
             ctx.req.message,
             ctx.history,
@@ -296,6 +300,7 @@ def produce_reply(
             profile_system_block=profile_block,
             schedule_guide_mode=guide_mode,
             system_prompt=companion_system,
+            max_tokens_override=voice_token_cap,
         )
     except AIUnavailableError as exc:
         logger.error("AI unavailable for chat turn: %s", exc)

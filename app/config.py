@@ -112,10 +112,16 @@ BEN_MASTER_SYSTEM_PROMPT = os.getenv("BEN_MASTER_SYSTEM_PROMPT", "").strip()
 VOICE_ENABLED = os.getenv("VOICE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 VOICE_MAX_RECORDING_SEC = int(os.getenv("VOICE_MAX_RECORDING_SEC", "90"))
 VOICE_DAILY_SECONDS_CAP = int(os.getenv("VOICE_DAILY_SECONDS_CAP", "600"))
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "whisper-1")
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "gpt-transcribe")
+# Lock STT language. Empty = provider auto-detect (can flip languages on short/noisy turns).
+# whisper / gpt-4o-* use singular `language`; gpt-transcribe uses `languages=[...]`.
+WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", "en").strip().lower()
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID_DEFAULT = os.getenv("ELEVENLABS_VOICE_ID_DEFAULT", "")
-ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
+# Flash is ~75ms model latency vs multilingual_v2 (much slower). English Ben voice → flash_v2.
+ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2")
+# Shorter spoken replies = faster LLM + faster TTS. Text chat keeps its own caps.
+VOICE_MAX_REPLY_TOKENS = int(os.getenv("VOICE_MAX_REPLY_TOKENS", "160"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 

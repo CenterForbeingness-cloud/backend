@@ -714,6 +714,7 @@ async def chat_voice(
     # TODO(post-MVP): upload TTS bytes to object storage; return signed URL instead of base64.
     assert_voice_enabled()
 
+    t0 = time.perf_counter()
     user_id = _current_user_id(_user)
     audio_bytes = await audio.read()
     if not audio_bytes:
@@ -725,6 +726,7 @@ async def chat_voice(
         mime_type=mime,
         filename=audio.filename,
     )
+    t_stt = time.perf_counter()
 
     if user_id:
         check_voice_quota(user_id, spoken_seconds)
@@ -755,8 +757,19 @@ async def chat_voice(
         background_tasks,
         default_provider=DEFAULT_PROVIDER,
     )
+    t_llm = time.perf_counter()
 
     audio_mp3, audio_mime = synthesize_speech(result.reply, course_slug=course_slug)
+    t_tts = time.perf_counter()
+    logger.info(
+        "voice_latency stt=%.2fs llm=%.2fs tts=%.2fs total=%.2fs spoken=%.1fs reply_chars=%s",
+        t_stt - t0,
+        t_llm - t_stt,
+        t_tts - t_llm,
+        t_tts - t0,
+        spoken_seconds,
+        len(result.reply or ""),
+    )
 
     if user_id:
         record_voice_usage(user_id, spoken_seconds)

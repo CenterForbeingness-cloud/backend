@@ -82,6 +82,7 @@ def generate_reply(
     profile_system_block: Optional[str] = None,
     schedule_guide_mode: bool = False,
     system_prompt: Optional[str] = None,
+    max_tokens_override: Optional[int] = None,
 ) -> str:
     if system_prompt is None:
         system_prompt = _default_system_prompt(
@@ -97,6 +98,8 @@ def generate_reply(
         else (0.2 if schedule_system_block else 0.5)
     )
     max_tokens = 300 if schedule_guide_mode else (280 if schedule_system_block else 300)
+    if max_tokens_override is not None:
+        max_tokens = max_tokens_override
     model = CHAT_MODEL_SCHEDULE if schedule_system_block else CHAT_MODEL
 
     if provider == "openai":

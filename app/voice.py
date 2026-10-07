@@ -15,6 +15,7 @@ from app.config import (
     ELEVENLABS_API_KEY,
     ELEVENLABS_MODEL_ID,
     ELEVENLABS_VOICE_ID_DEFAULT,
+    WHISPER_LANGUAGE,
     OPENAI_API_KEY,
     SUPABASE_DB_URL,
     VOICE_DAILY_SECONDS_CAP,
@@ -87,17 +88,48 @@ def transcribe_audio(
     client = OpenAI(api_key=OPENAI_API_KEY)
     ext, whisper_mime = _resolve_whisper_file_format(mime_type, filename)
 
+    create_kwargs: dict = {
+        "model": WHISPER_MODEL,
+        "file": (f"utterance.{ext}", audio_bytes, whisper_mime),
+    }
+    model_name = str(WHISPER_MODEL)
+    if model_name.startswith("whisper"):
+        create_kwargs["response_format"] = "verbose_json"
+        if WHISPER_LANGUAGE:
+            create_kwargs["language"] = WHISPER_LANGUAGE
+    elif model_name.startswith("gpt-transcribe") or model_name == "gpt-live-transcribe":
+        create_kwargs["response_format"] = "json"
+        if WHISPER_LANGUAGE:
+            create_kwargs["languages"] = [WHISPER_LANGUAGE]
+    else:
+        create_kwargs["response_format"] = "json"
+        if WHISPER_LANGUAGE:
+            create_kwargs["language"] = WHISPER_LANGUAGE
+
     try:
-        result = client.audio.transcriptions.create(
-            model=WHISPER_MODEL,
-            file=(f"utterance.{ext}", audio_bytes, whisper_mime),
-            response_format="verbose_json",
-        )
+        result = client.audio.transcriptions.create(**create_kwargs)
     except Exception as exc:
         logger.exception("Whisper transcription failed: %s", exc)
         raise HTTPException(status_code=502, detail="Speech transcription failed") from exc
 
     text = (getattr(result, "text", None) or "").strip()
+    detected = getattr(result, "language", None)
+    detected_list = getattr(result, "languages", None)
+    if not detected and isinstance(detected_list, list) and detected_list:
+        first = detected_list[0]
+        detected = getattr(first, "language", None) or (
+            first.get("language") if isinstance(first, dict) else first
+        )
+    if detected and WHISPER_LANGUAGE and str(detected).lower() not in {
+        WHISPER_LANGUAGE,
+        "english" if WHISPER_LANGUAGE == "en" else WHISPER_LANGUAGE,
+    }:
+        logger.warning(
+            "Whisper language mismatch: requested=%s reported=%s text_preview=%r",
+            WHISPER_LANGUAGE,
+            detected,
+            text[:80],
+        )
     if not text:
         raise HTTPException(status_code=400, detail="Could not transcribe audio")
 
