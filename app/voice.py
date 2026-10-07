@@ -95,16 +95,10 @@ def transcribe_audio(
     model_name = str(WHISPER_MODEL)
     if model_name.startswith("whisper"):
         create_kwargs["response_format"] = "verbose_json"
-        if WHISPER_LANGUAGE:
-            create_kwargs["language"] = WHISPER_LANGUAGE
-    elif model_name.startswith("gpt-transcribe") or model_name == "gpt-live-transcribe":
-        create_kwargs["response_format"] = "json"
-        if WHISPER_LANGUAGE:
-            create_kwargs["languages"] = [WHISPER_LANGUAGE]
     else:
         create_kwargs["response_format"] = "json"
-        if WHISPER_LANGUAGE:
-            create_kwargs["language"] = WHISPER_LANGUAGE
+    if WHISPER_LANGUAGE:
+        create_kwargs["language"] = WHISPER_LANGUAGE
 
     try:
         result = client.audio.transcriptions.create(**create_kwargs)
