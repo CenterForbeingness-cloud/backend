@@ -185,26 +185,23 @@ def _lookup_any_course_voice_id() -> Optional[str]:
 
 
 def resolve_voice_id(course_slug: Optional[str]) -> str:
-    candidates: list[str] = []
-    if course_slug:
-        candidates.append(course_slug)
-    candidates.append("week-zero-reset")
+    """
+    Resolve ElevenLabs voice_id for TTS.
 
-    seen: set[str] = set()
-    for slug in candidates:
-        if slug in seen:
-            continue
-        seen.add(slug)
-        voice_id = _lookup_course_voice_id(slug)
+    Companion (no course_slug) prefers ELEVENLABS_VOICE_ID_DEFAULT (Ben).
+    Course turns prefer that course's course_voice_profiles row, then Ben default.
+    """
+    if course_slug:
+        voice_id = _lookup_course_voice_id(course_slug)
         if voice_id:
             return voice_id
 
+    if ELEVENLABS_VOICE_ID_DEFAULT:
+        return ELEVENLABS_VOICE_ID_DEFAULT
     voice_id = _lookup_any_course_voice_id()
     if voice_id:
         return voice_id
 
-    if ELEVENLABS_VOICE_ID_DEFAULT:
-        return ELEVENLABS_VOICE_ID_DEFAULT
     raise HTTPException(
         status_code=503,
         detail=(

@@ -18,28 +18,33 @@ def test_resolve_voice_id_uses_default(monkeypatch):
     assert voice.resolve_voice_id("week-zero-reset") == "voice-default-123"
 
 
-def test_resolve_voice_id_falls_back_to_launch_course(monkeypatch):
+def test_resolve_voice_id_companion_prefers_ben_default(monkeypatch):
+    monkeypatch.setattr(voice, "SUPABASE_DB_URL", "postgresql://example")
+    monkeypatch.setattr(voice, "ELEVENLABS_VOICE_ID_DEFAULT", "JF4dNU1bkDUz9kbCiEER")
+    monkeypatch.setattr(voice, "_lookup_course_voice_id", lambda slug: "voice-old")
+    monkeypatch.setattr(voice, "_lookup_any_course_voice_id", lambda: "voice-any")
+    assert voice.resolve_voice_id(None) == "JF4dNU1bkDUz9kbCiEER"
+
+
+def test_resolve_voice_id_falls_back_to_any_course(monkeypatch):
     monkeypatch.setattr(voice, "SUPABASE_DB_URL", "postgresql://example")
     monkeypatch.setattr(voice, "ELEVENLABS_VOICE_ID_DEFAULT", "")
-
-    def fake_lookup(slug: str):
-        return "voice-wzr" if slug == "week-zero-reset" else None
-
-    monkeypatch.setattr(voice, "_lookup_course_voice_id", fake_lookup)
-    monkeypatch.setattr(voice, "_lookup_any_course_voice_id", lambda: None)
-    assert voice.resolve_voice_id(None) == "voice-wzr"
+    monkeypatch.setattr(voice, "_lookup_course_voice_id", lambda slug: None)
+    monkeypatch.setattr(voice, "_lookup_any_course_voice_id", lambda: "voice-any")
+    assert voice.resolve_voice_id(None) == "voice-any"
 
 
 def test_resolve_voice_id_prefers_requested_course(monkeypatch):
     monkeypatch.setattr(voice, "SUPABASE_DB_URL", "postgresql://example")
-    monkeypatch.setattr(voice, "ELEVENLABS_VOICE_ID_DEFAULT", "")
+    monkeypatch.setattr(voice, "ELEVENLABS_VOICE_ID_DEFAULT", "JF4dNU1bkDUz9kbCiEER")
 
     def fake_lookup(slug: str):
-        return {"deep-calm": "voice-dc", "week-zero-reset": "voice-wzr"}.get(slug)
+        return {"deep-calm": "voice-dc"}.get(slug)
 
     monkeypatch.setattr(voice, "_lookup_course_voice_id", fake_lookup)
     monkeypatch.setattr(voice, "_lookup_any_course_voice_id", lambda: None)
     assert voice.resolve_voice_id("deep-calm") == "voice-dc"
+    assert voice.resolve_voice_id("unknown-course") == "JF4dNU1bkDUz9kbCiEER"
 
 
 def test_resolve_voice_id_missing_config(monkeypatch):

@@ -43,15 +43,10 @@ CORS_ORIGINS: list[str] = [o.strip() for o in _raw_cors.split(",") if o.strip()]
 _chat_token_secret = (os.getenv("CHAT_TOKEN_SECRET") or "").strip()
 CHAT_TOKEN_SECRET = _chat_token_secret or (SUPABASE_JWT_SECRET or "")
 CHAT_TOKEN_TTL_SECONDS = int(os.getenv("CHAT_TOKEN_TTL_SECONDS", "900"))
-
-# Billing (Stripe)
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY") or os.getenv("STRIPE_API_KEY")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
-# Production must declare test or live. Keys must match that stage (Phase 1 item 6).
 PAYMENT_STAGE = (os.getenv("PAYMENT_STAGE") or "").strip().lower()
-
-# Per-course Stripe Price IDs (fallback when course_products rows are not seeded yet).
 STRIPE_PRICE_BY_COURSE_SLUG: dict[str, str] = {
     slug: price_id
     for slug, env_key in (
@@ -62,9 +57,7 @@ STRIPE_PRICE_BY_COURSE_SLUG: dict[str, str] = {
     )
     if (price_id := os.getenv(env_key, "").strip())
 }
-
-# Quotas & Rate Limiting
-FAIR_USE_LIMIT = int(os.getenv("FAIR_USE_LIMIT", "100"))  # messages per period
+FAIR_USE_LIMIT = int(os.getenv("FAIR_USE_LIMIT", "100"))
 QUOTA_RESET_PERIOD_HOURS = int(os.getenv("QUOTA_RESET_PERIOD_HOURS", "24"))
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "false").lower() in {
     "1",
@@ -79,59 +72,43 @@ RATE_LIMIT_BILLING = os.getenv("RATE_LIMIT_BILLING", "15/minute")
 
 # Admin & 2FA
 ADMIN_2FA_ISSUER = os.getenv("ADMIN_2FA_ISSUER", "Sentient")
-ADMIN_2FA_WINDOW = int(os.getenv("ADMIN_2FA_WINDOW", "1"))  # TOTP time window tolerance
-# Comma-separated IPs allowed to hit /admin/* (empty = allow all, for local dev)
+ADMIN_2FA_WINDOW = int(os.getenv("ADMIN_2FA_WINDOW", "1"))
 ADMIN_ALLOWED_IPS_RAW = os.getenv("ADMIN_ALLOWED_IPS", "").strip()
 ADMIN_UI_URL = os.getenv(
     "ADMIN_UI_URL",
     "https://backend-production-2df9.up.railway.app/admin/ui",
 ).strip()
-# Resend HTTP API — all transactional email (admin + app auth via Send Email hook)
 RESEND_API_KEY = (
     os.getenv("RESEND_API_KEY", "").strip()
-    or os.getenv("SMTP_PASSWORD", "").strip()  # legacy SMTP-to-Resend fallback
+    or os.getenv("SMTP_PASSWORD", "").strip()
 )
 _resend_from = os.getenv("RESEND_FROM_EMAIL", "").strip()
 _admin_from = os.getenv("ADMIN_INVITE_FROM_EMAIL", "").strip()
 RESEND_FROM_EMAIL = _resend_from or _admin_from
-# Kept as alias so older call sites / docs still resolve.
 ADMIN_INVITE_FROM_EMAIL = RESEND_FROM_EMAIL
-# Supabase Auth → Send Email Hook signing secret (v1,whsec_...)
 SUPABASE_SEND_EMAIL_HOOK_SECRET = os.getenv(
     "SUPABASE_SEND_EMAIL_HOOK_SECRET", ""
 ).strip()
 
 MARKETING_BEACON_SECRET = os.getenv("MARKETING_BEACON_SECRET", "").strip()
 RATE_LIMIT_MARKETING = os.getenv("RATE_LIMIT_MARKETING", "120/minute")
-
-# Ben coaching voice (companion turns). File is gitignored; stub is used if missing.
 BEN_MASTER_PROMPT_PATH = os.getenv("BEN_MASTER_PROMPT_PATH", "").strip()
 BEN_MASTER_SYSTEM_PROMPT = os.getenv("BEN_MASTER_SYSTEM_PROMPT", "").strip()
-
-# Voice (MVP Launch) — POST /chat/voice
 VOICE_ENABLED = os.getenv("VOICE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 VOICE_MAX_RECORDING_SEC = int(os.getenv("VOICE_MAX_RECORDING_SEC", "90"))
 VOICE_DAILY_SECONDS_CAP = int(os.getenv("VOICE_DAILY_SECONDS_CAP", "600"))
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "gpt-transcribe")
-# Lock STT language. Empty = provider auto-detect (can flip languages on short/noisy turns).
-# whisper / gpt-4o-* use singular `language`; gpt-transcribe uses `languages=[...]`.
 WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", "en").strip().lower()
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID_DEFAULT = os.getenv("ELEVENLABS_VOICE_ID_DEFAULT", "")
-# Flash is ~75ms model latency vs multilingual_v2 (much slower). English Ben voice → flash_v2.
 ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2")
-# Shorter spoken replies = faster LLM + faster TTS. Text chat keeps its own caps.
 VOICE_MAX_REPLY_TOKENS = int(os.getenv("VOICE_MAX_REPLY_TOKENS", "160"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-
-# Mux Video (Foundations media hosting). Token ID/Secret stay on the server only.
 MUX_TOKEN_ID = os.getenv("MUX_TOKEN_ID", "").strip()
 MUX_TOKEN_SECRET = os.getenv("MUX_TOKEN_SECRET", "").strip()
-# Optional RSA signing key for private playback JWTs (dashboard → Signing Keys).
 MUX_SIGNING_KEY_ID = os.getenv("MUX_SIGNING_KEY_ID", "").strip()
 MUX_SIGNING_PRIVATE_KEY = os.getenv("MUX_SIGNING_PRIVATE_KEY", "").strip()
-# Content key → Mux playback ID. Override in env as the library grows.
 MUX_PLAYBACK_BY_CONTENT_KEY: dict[str, str] = {
     key: playback_id
     for key, env_name, default in (
