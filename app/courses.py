@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from app.config import STRIPE_PRICsE_BY_COURSE_SLUG, SUPABASE_DB_URL, logger
+from app.config import STRIPE_PRICE_BY_COURSE_SLUG, SUPABASE_DB_URL, logger
 
 try:
     from psycopg.errors import UndefinedTable
